@@ -99,7 +99,7 @@ function barList(title, items, labelKey) {
 }
 
 async function dashboardView() {
-  const s = await api("stats");
+  const [s, drift] = await Promise.all([api("stats"), api("drift")]);
   const status = Object.fromEntries(s.status_counts.map(r => [r.inventory_status, Number(r.n)]));
   view.replaceChildren(
     el("h2", {}, "Dashboard"),
@@ -110,13 +110,33 @@ async function dashboardView() {
       tile("Packages with drift", s.drifting_packages, "#/drift"),
       tile("Servers behind", s.servers_behind, "#/drift"),
       tile("Last import", s.last_run ? fmtDate(s.last_run.completed_at || s.last_run.started_at) : "never", "#/runs")),
-    el("div", { class: "cards" },
-      barList("Active servers per beheergroep", s.beheergroep_counts, "beheergroep"),
-      barList("Active servers per OS", s.os_counts, "os"),
-      barList("Most installed extra packages", s.top_packages, "name")));
+    el("div", { class: "split" },
+      el("section", { class: "card" },
+        el("h3", {}, "Package drift"),
+        driftTable(drift.slice(0, 8)),
+        el("div", { class: "more" },
+          el("a", { href: "#/drift" }, "Open the full drift view →"))),
+      el("div", { class: "rail" },
+        barList("Active servers per beheergroep", s.beheergroep_counts, "beheergroep"),
+        barList("Active servers per OS", s.os_counts, "os"),
+        barList("Most installed extra packages", s.top_packages, "name"))));
 }
 
 /* ---------- drift ---------- */
+
+function driftTable(groups) {
+  return table(
+    ["Package", "OS", "Version spread (newest first)", el("th", { class: "num" }, "Servers behind")],
+    groups.map(g =>
+      el("tr", { class: "clickable", onclick: () => goto(`#/packages/${g.package_id}`) },
+        el("td", {}, g.name),
+        el("td", {}, g.os),
+        el("td", {}, el("div", { class: "chips" }, g.versions.map(v =>
+          el("span", { class: "chip " + (v.is_latest ? "chip-latest" : "chip-behind") },
+            `${v.is_latest ? "✓" : "↓"} ${verLabel(v)} × ${v.server_count}`)))),
+        el("td", { class: "num" }, String(g.behind_count)))),
+    "No version drift found — every package is at one version per OS.");
+}
 
 const driftState = { q: "", os: "", beheergroep: "" };
 
@@ -128,17 +148,7 @@ async function driftView() {
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(driftState)) if (v) params.set(k, v);
     const groups = await api("drift?" + params);
-    results.replaceChildren(table(
-      ["Package", "OS", "Version spread (newest first)", el("th", { class: "num" }, "Servers behind")],
-      groups.map(g =>
-        el("tr", { class: "clickable", onclick: () => goto(`#/packages/${g.package_id}`) },
-          el("td", {}, g.name),
-          el("td", {}, g.os),
-          el("td", {}, el("div", { class: "chips" }, g.versions.map(v =>
-            el("span", { class: "chip " + (v.is_latest ? "chip-latest" : "chip-behind") },
-              `${v.is_latest ? "✓" : "↓"} ${verLabel(v)} × ${v.server_count}`)))),
-          el("td", { class: "num" }, String(g.behind_count)))),
-      "No version drift found — every package is at one version per OS."));
+    results.replaceChildren(driftTable(groups));
   }
 
   const search = el("input", {
@@ -147,12 +157,13 @@ async function driftView() {
   });
 
   view.replaceChildren(
-    el("h2", {}, "Package drift"),
-    el("div", { class: "filters" },
-      search,
-      select(opts.os, driftState.os, "All OS", v => { driftState.os = v; refresh(); }),
-      select(opts.beheergroep, driftState.beheergroep, "All beheergroepen",
-        v => { driftState.beheergroep = v; refresh(); })),
+    el("div", { class: "toolbar" },
+      el("h2", {}, "Package drift"),
+      el("div", { class: "filters" },
+        search,
+        select(opts.os, driftState.os, "All OS", v => { driftState.os = v; refresh(); }),
+        select(opts.beheergroep, driftState.beheergroep, "All beheergroepen",
+          v => { driftState.beheergroep = v; refresh(); }))),
     results);
   refresh();
 }
@@ -215,17 +226,18 @@ async function serversView() {
   }
 
   view.replaceChildren(
-    el("h2", {}, "Servers"),
-    el("div", { class: "filters" },
-      el("input", {
-        type: "search", placeholder: "Search hostname…", value: serverState.q,
-        oninput: debounce(e => { serverState.q = e.target.value; refresh(); }, 250),
-      }),
-      select(opts.beheergroep, serverState.beheergroep, "All beheergroepen",
-        v => { serverState.beheergroep = v; refresh(); }),
-      select(opts.os, serverState.os, "All OS", v => { serverState.os = v; refresh(); }),
-      select(["ACTIVE", "MISSING", "DECOMMISSIONED"], serverState.status, "All statuses",
-        v => { serverState.status = v; refresh(); })),
+    el("div", { class: "toolbar" },
+      el("h2", {}, "Servers"),
+      el("div", { class: "filters" },
+        el("input", {
+          type: "search", placeholder: "Search hostname…", value: serverState.q,
+          oninput: debounce(e => { serverState.q = e.target.value; refresh(); }, 250),
+        }),
+        select(opts.beheergroep, serverState.beheergroep, "All beheergroepen",
+          v => { serverState.beheergroep = v; refresh(); }),
+        select(opts.os, serverState.os, "All OS", v => { serverState.os = v; refresh(); }),
+        select(["ACTIVE", "MISSING", "DECOMMISSIONED"], serverState.status, "All statuses",
+          v => { serverState.status = v; refresh(); }))),
     results);
   refresh();
 }
@@ -305,12 +317,13 @@ async function packagesView() {
   }
 
   view.replaceChildren(
-    el("h2", {}, "Packages"),
-    el("div", { class: "filters" },
-      el("input", {
-        type: "search", placeholder: "Search packages…", value: packageState.q,
-        oninput: debounce(e => { packageState.q = e.target.value; refresh(); }, 250),
-      })),
+    el("div", { class: "toolbar" },
+      el("h2", {}, "Packages"),
+      el("div", { class: "filters" },
+        el("input", {
+          type: "search", placeholder: "Search packages…", value: packageState.q,
+          oninput: debounce(e => { packageState.q = e.target.value; refresh(); }, 250),
+        }))),
     results);
   refresh();
 }
