@@ -4,6 +4,8 @@ from datetime import datetime
 import psycopg2
 from psycopg2.extras import execute_values
 
+import drift
+
 
 def parse_install_time(value):
     """Convert RPM install time to datetime."""
@@ -266,6 +268,11 @@ WHERE
     AND last_inventory_run <> %s;
 """,
 (inventory_run_id,))
+
+
+group_count, drifting_count = drift.materialize(cur)
+
+print(f"Drift materialized: {group_count} package/os groups, {drifting_count} drifting")
 
 
 cur.execute("""

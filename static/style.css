@@ -193,6 +193,27 @@ th.sortable:hover { color: var(--ink); }
 .chip-latest { background: color-mix(in srgb, var(--good) 12%, var(--surface)); }
 .chip-behind { background: color-mix(in srgb, var(--serious) 16%, var(--surface)); }
 
+/* Pagination */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.pager button {
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  font: inherit;
+  cursor: pointer;
+}
+.pager button:disabled { color: var(--muted); cursor: default; }
+.pager button:not(:disabled):hover { border-color: var(--accent); }
+
 /* Filters */
 .filters {
   display: flex;

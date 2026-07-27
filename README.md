@@ -7,7 +7,9 @@ seen on the same OS.
 ## Components
 
 - `setup.sql` — database schema + indexes (PostgreSQL, database `extrap`, role `testuser`)
+- `migrate_drift.sql` — one-time migration for databases created before drift materialization
 - `import.py` — imports `xtra.json` (SUSE Manager + PuppetDB export) into the database
+- `drift.py` — materializes drift after each import (also runnable standalone)
 - `app.py` / `db.py` / `rpmver.py` — Flask API (read-only) with pure-Python rpm version comparison
 - `static/` — vanilla HTML/JS/CSS single-page frontend (no external libraries)
 
@@ -28,10 +30,22 @@ Database connection settings for the app come from the standard `PGHOST`,
 `PGDATABASE`, `PGUSER`, `PGPASSWORD` environment variables (defaults match
 `import.py`: localhost / extrap / testuser).
 
+## Upgrading an existing database
+
+Databases created before drift materialization need the migration once:
+
+```sh
+psql -U testuser -d extrap -f migrate_drift.sql
+python import.py      # or: python drift.py (rebuild without importing)
+```
+
 ## Notes
 
 - Drift is computed per `(package, OS)` group over ACTIVE servers only, so
-  SLES and RedHat builds of the same package are never compared.
+  SLES and RedHat builds of the same package are never compared. It is
+  materialized at import time (`package_drift` + `server_packages.is_latest`),
+  so API requests never scan the full inventory; list endpoints paginate
+  (`limit`/`offset`, default 50, max 200) and return `{total, items}`.
 - Version ordering uses the rpmvercmp algorithm (`rpmver.py`), so
   `6.0.45 > 6.0.9` and `1.2~rc1 < 1.2`.
 - Servers with `suma: false` or an empty uuid are skipped by `import.py`

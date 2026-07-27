@@ -54,6 +54,23 @@ function table(headers, rows, emptyText) {
 
 function goto(hash) { location.hash = hash; }
 
+function pager(state, total, refresh) {
+  const from = total === 0 ? 0 : state.offset + 1;
+  const to = Math.min(state.offset + state.limit, total);
+  const prev = el("button", {
+    onclick: () => { state.offset = Math.max(0, state.offset - state.limit); refresh(); },
+  }, "‹ Prev");
+  const next = el("button", {
+    onclick: () => { state.offset += state.limit; refresh(); },
+  }, "Next ›");
+  prev.disabled = state.offset === 0;
+  next.disabled = to >= total;
+  return el("div", { class: "pager" },
+    prev,
+    el("span", {}, total === 0 ? "0 results" : `${from}–${to} of ${total}`),
+    next);
+}
+
 let filterOpts = null;
 async function getFilterOpts() {
   if (!filterOpts) {
@@ -99,7 +116,7 @@ function barList(title, items, labelKey) {
 }
 
 async function dashboardView() {
-  const [s, drift] = await Promise.all([api("stats"), api("drift")]);
+  const [s, drift] = await Promise.all([api("stats"), api("drift?limit=8")]);
   const status = Object.fromEntries(s.status_counts.map(r => [r.inventory_status, Number(r.n)]));
   const lastImport = s.last_run ? (s.last_run.completed_at || s.last_run.started_at) : null;
   view.replaceChildren(
@@ -116,9 +133,9 @@ async function dashboardView() {
     el("div", { class: "split" },
       el("section", { class: "card" },
         el("h3", {}, "Package drift"),
-        driftTable(drift.slice(0, 8)),
+        driftTable(drift.items),
         el("div", { class: "more" },
-          el("a", { href: "#/drift" }, "Open the full drift view →"))),
+          el("a", { href: "#/drift" }, `Open the full drift view (${drift.total}) →`))),
       el("div", { class: "rail" },
         barList("Active servers per beheergroep", s.beheergroep_counts, "beheergroep"),
         barList("Active servers per OS", s.os_counts, "os"),
@@ -141,7 +158,7 @@ function driftTable(groups) {
     "No version drift found — every package is at one version per OS.");
 }
 
-const driftState = { q: "", os: "", beheergroep: "" };
+const driftState = { q: "", os: "", beheergroep: "", limit: 50, offset: 0 };
 
 async function driftView() {
   const opts = await getFilterOpts();
@@ -150,13 +167,15 @@ async function driftView() {
   async function refresh() {
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(driftState)) if (v) params.set(k, v);
-    const groups = await api("drift?" + params);
-    results.replaceChildren(driftTable(groups));
+    const data = await api("drift?" + params);
+    results.replaceChildren(
+      driftTable(data.items),
+      pager(driftState, data.total, refresh));
   }
 
   const search = el("input", {
     type: "search", placeholder: "Filter packages…", value: driftState.q,
-    oninput: debounce(e => { driftState.q = e.target.value; refresh(); }, 250),
+    oninput: debounce(e => { driftState.q = e.target.value; driftState.offset = 0; refresh(); }, 250),
   });
 
   view.replaceChildren(
@@ -164,16 +183,17 @@ async function driftView() {
       el("h2", {}, "Package drift"),
       el("div", { class: "filters" },
         search,
-        select(opts.os, driftState.os, "All OS", v => { driftState.os = v; refresh(); }),
+        select(opts.os, driftState.os, "All OS",
+          v => { driftState.os = v; driftState.offset = 0; refresh(); }),
         select(opts.beheergroep, driftState.beheergroep, "All beheergroepen",
-          v => { driftState.beheergroep = v; refresh(); }))),
+          v => { driftState.beheergroep = v; driftState.offset = 0; refresh(); }))),
     results);
   refresh();
 }
 
 /* ---------- servers ---------- */
 
-const serverState = { q: "", beheergroep: "", os: "", status: "", sort: "hostname", dir: "asc" };
+const serverState = { q: "", beheergroep: "", os: "", status: "", sort: "hostname", dir: "asc", limit: 50, offset: 0 };
 
 async function serversView() {
   const opts = await getFilterOpts();
@@ -191,6 +211,7 @@ async function serversView() {
           serverState.sort = key;
           serverState.dir = "asc";
         }
+        serverState.offset = 0;
         refresh();
       },
     }, label + arrow);
@@ -199,7 +220,7 @@ async function serversView() {
   async function refresh() {
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(serverState)) if (v) params.set(k, v);
-    const servers = await api("servers?" + params);
+    const data = await api("servers?" + params);
     results.replaceChildren(table(
       [
         sortableTh("Hostname", "hostname"),
@@ -209,10 +230,10 @@ async function serversView() {
         sortableTh("SL", "servicelevel"),
         sortableTh("Status", "inventory_status"),
         sortableTh("Packages", "package_count", "num"),
-        el("th", { class: "num" }, "Behind"),
+        sortableTh("Behind", "behind_count", "num"),
         sortableTh("Last seen", "last_seen"),
       ],
-      servers.map(s =>
+      data.items.map(s =>
         el("tr", { class: "clickable", onclick: () => goto(`#/servers/${s.id}`) },
           el("td", {}, s.hostname),
           el("td", {}, s.beheergroep ?? "—"),
@@ -225,7 +246,8 @@ async function serversView() {
             ? el("span", { class: "badge badge-warn" }, String(s.behind_count))
             : "0"),
           el("td", {}, fmtDate(s.last_seen)))),
-      "No servers match these filters."));
+      "No servers match these filters."),
+      pager(serverState, data.total, refresh));
   }
 
   view.replaceChildren(
@@ -234,13 +256,14 @@ async function serversView() {
       el("div", { class: "filters" },
         el("input", {
           type: "search", placeholder: "Search hostname…", value: serverState.q,
-          oninput: debounce(e => { serverState.q = e.target.value; refresh(); }, 250),
+          oninput: debounce(e => { serverState.q = e.target.value; serverState.offset = 0; refresh(); }, 250),
         }),
         select(opts.beheergroep, serverState.beheergroep, "All beheergroepen",
-          v => { serverState.beheergroep = v; refresh(); }),
-        select(opts.os, serverState.os, "All OS", v => { serverState.os = v; refresh(); }),
+          v => { serverState.beheergroep = v; serverState.offset = 0; refresh(); }),
+        select(opts.os, serverState.os, "All OS",
+          v => { serverState.os = v; serverState.offset = 0; refresh(); }),
         select(["ACTIVE", "MISSING", "DECOMMISSIONED"], serverState.status, "All statuses",
-          v => { serverState.status = v; refresh(); }))),
+          v => { serverState.status = v; serverState.offset = 0; refresh(); }))),
     results);
   refresh();
 }
@@ -296,19 +319,19 @@ async function serverDetailView(id) {
 
 /* ---------- packages ---------- */
 
-const packageState = { q: "" };
+const packageState = { q: "", limit: 50, offset: 0 };
 
 async function packagesView() {
   const results = el("div", {}, el("p", { class: "muted" }, "Loading…"));
 
   async function refresh() {
     const params = new URLSearchParams();
-    if (packageState.q) params.set("q", packageState.q);
-    const pkgs = await api("packages?" + params);
+    for (const [k, v] of Object.entries(packageState)) if (v) params.set(k, v);
+    const data = await api("packages?" + params);
     results.replaceChildren(table(
       ["Package", el("th", { class: "num" }, "Versions"),
        el("th", { class: "num" }, "Servers"), "Drift"],
-      pkgs.map(p =>
+      data.items.map(p =>
         el("tr", { class: "clickable", onclick: () => goto(`#/packages/${p.id}`) },
           el("td", {}, p.name),
           el("td", { class: "num" }, String(p.version_count)),
@@ -316,7 +339,8 @@ async function packagesView() {
           el("td", {}, p.has_drift
             ? el("span", { class: "badge badge-warn" }, "drift")
             : el("span", { class: "muted" }, "—")))),
-      "No packages match."));
+      "No packages match."),
+      pager(packageState, data.total, refresh));
   }
 
   view.replaceChildren(
@@ -325,7 +349,7 @@ async function packagesView() {
       el("div", { class: "filters" },
         el("input", {
           type: "search", placeholder: "Search packages…", value: packageState.q,
-          oninput: debounce(e => { packageState.q = e.target.value; refresh(); }, 250),
+          oninput: debounce(e => { packageState.q = e.target.value; packageState.offset = 0; refresh(); }, 250),
         }))),
     results);
   refresh();

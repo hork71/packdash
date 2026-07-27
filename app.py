@@ -1,8 +1,8 @@
 """Package tracker API + static frontend.
 
-Read-only over the database import.py fills; drift is computed at request
-time from server_packages, grouped per (package, os) so SLES and RedHat
-builds of the same package are never compared against each other.
+Read-only over the database import.py fills. Drift is precomputed at
+import time (drift.py) into package_drift + server_packages.is_latest,
+so requests only run small indexed queries; list endpoints paginate.
 """
 
 import uuid as uuidlib
@@ -34,107 +34,14 @@ def clean(rows):
     return out
 
 
-#
-# Drift computation
-#
+def page_params(default_limit=50, max_limit=200):
+    try:
+        limit = int(request.args.get("limit", default_limit))
+        offset = int(request.args.get("offset", 0))
+    except ValueError:
+        return default_limit, 0
+    return max(1, min(limit, max_limit)), max(offset, 0)
 
-_DRIFT_SQL = """
-SELECT
-    p.id AS package_id,
-    p.name,
-    s.os,
-    pv.version,
-    pv.release,
-    pv.arch,
-    s.id AS server_id,
-    s.hostname,
-    s.beheergroep
-FROM server_packages sp
-JOIN servers s ON s.id = sp.server_id
-JOIN package_versions pv ON pv.id = sp.package_version_id
-JOIN packages p ON p.id = pv.package_id
-WHERE s.inventory_status = 'ACTIVE'
-"""
-
-
-def drift_groups(beheergroep=None, os_filter=None, q=None):
-    """Group active-server package rows by (package, os).
-
-    Each group carries its versions ((version, release) -> server rows),
-    the newest version per rpmvercmp, and a drifting flag. Filters narrow
-    the server set first, so drift is judged within the filtered scope.
-    """
-    sql = _DRIFT_SQL
-    params = []
-    if beheergroep:
-        sql += " AND s.beheergroep = %s"
-        params.append(beheergroep)
-    if os_filter:
-        sql += " AND s.os = %s"
-        params.append(os_filter)
-    if q:
-        sql += " AND p.name ILIKE %s"
-        params.append(f"%{q}%")
-
-    groups = {}
-    for row in db.query(sql, params):
-        key = (row["package_id"], row["os"])
-        group = groups.setdefault(key, {
-            "package_id": row["package_id"],
-            "name": row["name"],
-            "os": row["os"],
-            "versions": {},
-        })
-        group["versions"].setdefault((row["version"], row["release"]), []).append(row)
-
-    for group in groups.values():
-        group["latest"] = max(group["versions"], key=rpmver.vr_key)
-        group["drifting"] = len(group["versions"]) > 1
-
-    return list(groups.values())
-
-
-def group_summary(group):
-    """JSON shape for one drift group, newest version first."""
-    versions = []
-    behind = 0
-    for vkey in sorted(group["versions"], key=rpmver.vr_key, reverse=True):
-        rows = group["versions"][vkey]
-        is_latest = vkey == group["latest"]
-        if not is_latest:
-            behind += len(rows)
-        versions.append({
-            "version": vkey[0],
-            "release": vkey[1],
-            "arch": rows[0]["arch"],
-            "server_count": len(rows),
-            "is_latest": is_latest,
-        })
-    return {
-        "package_id": group["package_id"],
-        "name": group["name"],
-        "os": group["os"],
-        "versions": versions,
-        "behind_count": behind,
-    }
-
-
-def behind_per_server():
-    """server_id -> number of packages behind the newest in their os group."""
-    behind = {}
-    for group in drift_groups():
-        if not group["drifting"]:
-            continue
-        for vkey, rows in group["versions"].items():
-            if vkey != group["latest"]:
-                for r in rows:
-                    behind[r["server_id"]] = behind.get(r["server_id"], 0) + 1
-    return behind
-
-
-#
-# API
-#
 
 @app.get("/api/stats")
 def stats():
@@ -159,24 +66,24 @@ def stats():
     """)
     package_count = db.query("SELECT COUNT(*) AS n FROM packages")[0]["n"]
     top_packages = db.query("""
-        SELECT p.id AS package_id, p.name, COUNT(DISTINCT sp.server_id) AS n
-        FROM packages p
-        JOIN package_versions pv ON pv.package_id = p.id
-        JOIN server_packages sp ON sp.package_version_id = pv.id
-        JOIN servers s ON s.id = sp.server_id AND s.inventory_status = 'ACTIVE'
+        SELECT p.id AS package_id, p.name, SUM(pd.server_count) AS n
+        FROM package_drift pd
+        JOIN packages p ON p.id = pd.package_id
         GROUP BY p.id, p.name
         ORDER BY n DESC, p.name
         LIMIT 10
     """)
     last_run = db.query("SELECT * FROM inventory_runs ORDER BY id DESC LIMIT 1")
 
-    groups = drift_groups()
-    drifting = [g for g in groups if g["drifting"]]
-    behind_servers = set()
-    for g in drifting:
-        for vkey, rows in g["versions"].items():
-            if vkey != g["latest"]:
-                behind_servers.update(r["server_id"] for r in rows)
+    drifting_packages = db.query("""
+        SELECT COUNT(*) AS n FROM package_drift WHERE version_count > 1
+    """)[0]["n"]
+    servers_behind = db.query("""
+        SELECT COUNT(DISTINCT sp.server_id) AS n
+        FROM server_packages sp
+        JOIN servers s ON s.id = sp.server_id
+        WHERE NOT sp.is_latest AND s.inventory_status = 'ACTIVE'
+    """)[0]["n"]
 
     return jsonify({
         "status_counts": clean(status_counts),
@@ -185,8 +92,8 @@ def stats():
         "package_count": package_count,
         "top_packages": clean(top_packages),
         "last_run": clean(last_run)[0] if last_run else None,
-        "drifting_packages": len(drifting),
-        "servers_behind": len(behind_servers),
+        "drifting_packages": drifting_packages,
+        "servers_behind": servers_behind,
     })
 
 
@@ -198,12 +105,14 @@ _SERVER_SORT = {
     "servicelevel": "s.servicelevel",
     "inventory_status": "s.inventory_status",
     "package_count": "package_count",
+    "behind_count": "behind_count",
     "last_seen": "s.last_seen",
 }
 
 
 @app.get("/api/servers")
 def servers():
+    limit, offset = page_params()
     where = []
     params = []
     for field, column in (
@@ -220,24 +129,26 @@ def servers():
         where.append("s.hostname ILIKE %s")
         params.append(f"%{q}%")
 
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     sort = _SERVER_SORT.get(request.args.get("sort", ""), "s.hostname")
     direction = "DESC" if request.args.get("dir") == "desc" else "ASC"
 
-    sql = f"""
-        SELECT s.*, COUNT(sp.package_version_id) AS package_count
+    total = db.query(
+        f"SELECT COUNT(*) AS n FROM servers s {where_sql}", params)[0]["n"]
+
+    rows = clean(db.query(f"""
+        SELECT s.*,
+               (SELECT COUNT(*) FROM server_packages sp
+                WHERE sp.server_id = s.id) AS package_count,
+               (SELECT COUNT(*) FROM server_packages sp
+                WHERE sp.server_id = s.id AND NOT sp.is_latest) AS behind_count
         FROM servers s
-        LEFT JOIN server_packages sp ON sp.server_id = s.id
-        {"WHERE " + " AND ".join(where) if where else ""}
-        GROUP BY s.id
+        {where_sql}
         ORDER BY {sort} {direction}, s.hostname
-    """
-    rows = clean(db.query(sql, params))
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset]))
 
-    behind = behind_per_server()
-    for row in rows:
-        row["behind_count"] = behind.get(row["id"], 0)
-
-    return jsonify(rows)
+    return jsonify({"total": total, "limit": limit, "offset": offset, "items": rows})
 
 
 @app.get("/api/servers/<server_id>")
@@ -255,22 +166,18 @@ def server_detail(server_id):
     packages = clean(db.query("""
         SELECT p.id AS package_id, p.name,
                pv.version, pv.release, pv.arch,
-               sp.install_time
+               sp.install_time, sp.is_latest,
+               lv.version AS latest_version, lv.release AS latest_release
         FROM server_packages sp
         JOIN package_versions pv ON pv.id = sp.package_version_id
         JOIN packages p ON p.id = pv.package_id
+        JOIN servers s ON s.id = sp.server_id
+        LEFT JOIN package_drift pd
+               ON pd.package_id = pv.package_id AND pd.os = s.os
+        LEFT JOIN package_versions lv ON lv.id = pd.latest_version_id
         WHERE sp.server_id = %s
         ORDER BY p.name
     """, (server_id,)))
-
-    latest_map = {(g["package_id"], g["os"]): g for g in drift_groups()}
-    for pkg in packages:
-        group = latest_map.get((pkg["package_id"], server["os"]))
-        if group and (pkg["version"], pkg["release"]) != group["latest"]:
-            pkg["is_latest"] = False
-            pkg["latest_version"], pkg["latest_release"] = group["latest"]
-        else:
-            pkg["is_latest"] = True
 
     server["behind_count"] = sum(1 for p in packages if not p["is_latest"])
     return jsonify({"server": server, "packages": packages})
@@ -278,26 +185,32 @@ def server_detail(server_id):
 
 @app.get("/api/packages")
 def packages():
+    limit, offset = page_params()
     q = request.args.get("q")
-    sql = """
-        SELECT p.id, p.name,
-               COUNT(DISTINCT pv.id) AS version_count,
-               COUNT(DISTINCT sp.server_id) AS server_count
-        FROM packages p
-        LEFT JOIN package_versions pv ON pv.package_id = p.id
-        LEFT JOIN server_packages sp ON sp.package_version_id = pv.id
-    """
-    params = []
-    if q:
-        sql += " WHERE p.name ILIKE %s"
-        params.append(f"%{q}%")
-    sql += " GROUP BY p.id, p.name ORDER BY p.name"
-    rows = clean(db.query(sql, params))
+    where_sql = "WHERE p.name ILIKE %s" if q else ""
+    params = [f"%{q}%"] if q else []
 
-    drifting_ids = {g["package_id"] for g in drift_groups() if g["drifting"]}
-    for row in rows:
-        row["has_drift"] = row["id"] in drifting_ids
-    return jsonify(rows)
+    total = db.query(
+        f"SELECT COUNT(*) AS n FROM packages p {where_sql}", params)[0]["n"]
+
+    rows = clean(db.query(f"""
+        SELECT p.id, p.name,
+               (SELECT COUNT(*) FROM package_versions pv
+                WHERE pv.package_id = p.id) AS version_count,
+               (SELECT COUNT(DISTINCT sp.server_id)
+                FROM server_packages sp
+                JOIN package_versions pv ON pv.id = sp.package_version_id
+                WHERE pv.package_id = p.id) AS server_count,
+               EXISTS(SELECT 1 FROM package_drift pd
+                      WHERE pd.package_id = p.id
+                        AND pd.version_count > 1) AS has_drift
+        FROM packages p
+        {where_sql}
+        ORDER BY p.name
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset]))
+
+    return jsonify({"total": total, "limit": limit, "offset": offset, "items": rows})
 
 
 @app.get("/api/packages/<int:package_id>")
@@ -306,9 +219,15 @@ def package_detail(package_id):
     if not pkg:
         abort(404)
 
+    latest_ids = {r["os"]: r["latest_version_id"] for r in db.query("""
+        SELECT os, latest_version_id
+        FROM package_drift
+        WHERE package_id = %s
+    """, (package_id,))}
+
     rows = db.query("""
         SELECT s.os, s.inventory_status,
-               pv.version, pv.release, pv.arch,
+               pv.id AS version_id, pv.version, pv.release, pv.arch,
                s.id AS server_id, s.hostname, s.beheergroep,
                sp.install_time
         FROM server_packages sp
@@ -325,10 +244,7 @@ def package_detail(package_id):
 
     os_groups = []
     for os_name, versions in sorted(by_os.items()):
-        # "Latest" is judged among versions an ACTIVE server still runs.
-        active = [v for v, vrows in versions.items()
-                  if any(r["inventory_status"] == "ACTIVE" for r in vrows)]
-        latest = max(active or versions, key=rpmver.vr_key)
+        latest_id = latest_ids.get(os_name)
 
         vlist = []
         for vkey in sorted(versions, key=rpmver.vr_key, reverse=True):
@@ -337,7 +253,7 @@ def package_detail(package_id):
                 "version": vkey[0],
                 "release": vkey[1],
                 "arch": vrows[0]["arch"],
-                "is_latest": vkey == latest,
+                "is_latest": any(r["version_id"] == latest_id for r in vrows),
                 "servers": clean([{
                     "id": r["server_id"],
                     "hostname": r["hostname"],
@@ -348,7 +264,7 @@ def package_detail(package_id):
             })
         os_groups.append({
             "os": os_name,
-            "drifting": len(versions) > 1,
+            "drifting": len(vlist) > 1,
             "versions": vlist,
         })
 
@@ -361,14 +277,82 @@ def package_detail(package_id):
 
 @app.get("/api/drift")
 def drift():
-    groups = drift_groups(
-        beheergroep=request.args.get("beheergroep"),
-        os_filter=request.args.get("os"),
-        q=request.args.get("q"),
-    )
-    report = [group_summary(g) for g in groups if g["drifting"]]
-    report.sort(key=lambda g: (-g["behind_count"], g["name"]))
-    return jsonify(report)
+    limit, offset = page_params()
+    where = ["pd.version_count > 1"]
+    params = []
+    os_filter = request.args.get("os")
+    if os_filter:
+        where.append("pd.os = %s")
+        params.append(os_filter)
+    q = request.args.get("q")
+    if q:
+        where.append("p.name ILIKE %s")
+        params.append(f"%{q}%")
+    beheergroep = request.args.get("beheergroep")
+    if beheergroep:
+        # Groups with at least one active server in this beheergroep;
+        # "latest" itself stays fleet-wide.
+        where.append("""EXISTS (
+            SELECT 1 FROM server_packages sp
+            JOIN servers s ON s.id = sp.server_id
+            JOIN package_versions pv ON pv.id = sp.package_version_id
+            WHERE pv.package_id = pd.package_id
+              AND s.os = pd.os
+              AND s.inventory_status = 'ACTIVE'
+              AND s.beheergroep = %s
+        )""")
+        params.append(beheergroep)
+
+    where_sql = " AND ".join(where)
+    total = db.query(f"""
+        SELECT COUNT(*) AS n
+        FROM package_drift pd
+        JOIN packages p ON p.id = pd.package_id
+        WHERE {where_sql}
+    """, params)[0]["n"]
+
+    groups = clean(db.query(f"""
+        SELECT pd.package_id, p.name, pd.os, pd.behind_count
+        FROM package_drift pd
+        JOIN packages p ON p.id = pd.package_id
+        WHERE {where_sql}
+        ORDER BY pd.behind_count DESC, p.name, pd.os
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset]))
+
+    # Version spread for just this page of groups.
+    if groups:
+        keys = tuple((g["package_id"], g["os"]) for g in groups)
+        spread = db.query("""
+            SELECT pv.package_id, s.os, pv.version, pv.release,
+                   sp.is_latest, MIN(pv.arch) AS arch,
+                   COUNT(*) AS server_count
+            FROM server_packages sp
+            JOIN servers s ON s.id = sp.server_id
+            JOIN package_versions pv ON pv.id = sp.package_version_id
+            WHERE s.inventory_status = 'ACTIVE'
+              AND (pv.package_id, s.os) IN %s
+            GROUP BY pv.package_id, s.os, pv.version, pv.release, sp.is_latest
+        """, (keys,))
+
+        by_key = {}
+        for row in spread:
+            by_key.setdefault((row["package_id"], row["os"]), []).append(row)
+
+        for g in groups:
+            versions = by_key.get((g["package_id"], g["os"]), [])
+            versions.sort(
+                key=lambda v: rpmver.vr_key((v["version"], v["release"])),
+                reverse=True)
+            g["versions"] = [{
+                "version": v["version"],
+                "release": v["release"],
+                "arch": v["arch"],
+                "server_count": v["server_count"],
+                "is_latest": v["is_latest"],
+            } for v in versions]
+
+    return jsonify({"total": total, "limit": limit, "offset": offset, "items": groups})
 
 
 @app.get("/api/runs")
