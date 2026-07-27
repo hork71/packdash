@@ -101,6 +101,7 @@ function barList(title, items, labelKey) {
 async function dashboardView() {
   const [s, drift] = await Promise.all([api("stats"), api("drift")]);
   const status = Object.fromEntries(s.status_counts.map(r => [r.inventory_status, Number(r.n)]));
+  const lastImport = s.last_run ? (s.last_run.completed_at || s.last_run.started_at) : null;
   view.replaceChildren(
     el("h2", {}, "Dashboard"),
     el("div", { class: "tiles" },
@@ -109,7 +110,9 @@ async function dashboardView() {
       tile("Tracked packages", s.package_count, "#/packages"),
       tile("Packages with drift", s.drifting_packages, "#/drift"),
       tile("Servers behind", s.servers_behind, "#/drift"),
-      tile("Last import", s.last_run ? fmtDate(s.last_run.completed_at || s.last_run.started_at) : "never", "#/runs")),
+      lastImport
+        ? tile(`Last import (${lastImport.slice(0, 10)})`, lastImport.slice(11, 16), "#/runs")
+        : tile("Last import", "never", "#/runs")),
     el("div", { class: "split" },
       el("section", { class: "card" },
         el("h3", {}, "Package drift"),
