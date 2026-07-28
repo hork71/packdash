@@ -8,6 +8,8 @@ seen on the same OS.
 
 - `setup.sql` — database schema + indexes (PostgreSQL, database `extrap`, role `testuser`)
 - `migrate_drift.sql` — one-time migration for databases created before drift materialization
+- `migrate_drift_levels.sql` — one-time migration for per-OS-release drift levels
+- `oslevel.py` — normalizes (os, osversie) to the drift level (RedHat/SUSE major, Ubuntu major.minor)
 - `import.py` — imports `xtra.json` (SUSE Manager + PuppetDB export) into the database
 - `drift.py` — materializes drift after each import (also runnable standalone)
 - `app.py` / `db.py` / `rpmver.py` — Flask API (read-only) with pure-Python rpm version comparison
@@ -36,13 +38,15 @@ Databases created before drift materialization need the migration once:
 
 ```sh
 psql -U testuser -d extrap -f migrate_drift.sql
+psql -U testuser -d extrap -f migrate_drift_levels.sql
 python import.py      # or: python drift.py (rebuild without importing)
 ```
 
 ## Notes
 
-- Drift is computed per `(package, OS)` group over ACTIVE servers only, so
-  SLES and RedHat builds of the same package are never compared. It is
+- Drift is computed per `(package, OS, OS release)` level over ACTIVE
+  servers only, so builds from different distributions or major releases
+  (RedHat 7/8/9, Ubuntu 18.04–24.04, SLES 12/15) are never compared. It is
   materialized at import time (`package_drift` + `server_packages.is_latest`),
   so API requests never scan the full inventory; list endpoints paginate
   (`limit`/`offset`, default 50, max 200) and return `{total, items}`.

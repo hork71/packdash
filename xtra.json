@@ -624,5 +624,248 @@
       }
     ],
     "aantal": 26
+  },
+  {
+    "naam": "example7.com",
+    "beheergroep": "ORACLE",
+    "beheeremail": "email7@example.com",
+    "datum": "07/28/26 06:55:00 AM CEST",
+    "owner": "ORACLE",
+    "sl": "3",
+    "os": "RedHat",
+    "osversie": "7.9",
+    "suma": true,
+    "uuid": "3f0a1b2c4d5e6f708192a3b4c5d6e7f8",
+    "apiversie": "26",
+    "extraPackages": [
+      {
+        "release": "1",
+        "name": "audisp-cef",
+        "installtime": "5/12/21 10:12:33 AM CEST",
+        "arch": "x86_64",
+        "version": "1.15"
+      },
+      {
+        "release": "1.el7",
+        "name": "puppet-agent",
+        "installtime": "5/12/21 10:15:02 AM CEST",
+        "arch": "x86_64",
+        "version": "7.20.0"
+      },
+      {
+        "release": "1.el7",
+        "name": "zabbix-agent",
+        "installtime": "11/24/23 9:58:11 AM CET",
+        "arch": "x86_64",
+        "version": "5.0.39"
+      },
+      {
+        "release": "1",
+        "name": "telegraf",
+        "installtime": "6/2/24 3:41:20 PM CEST",
+        "arch": "x86_64",
+        "version": "1.30.0"
+      }
+    ],
+    "aantal": 4
+  },
+  {
+    "naam": "example8.com",
+    "beheergroep": "SAMMON",
+    "beheeremail": "email8@example.com",
+    "datum": "07/28/26 06:55:00 AM CEST",
+    "owner": "SAMMON",
+    "sl": "2",
+    "os": "RedHat",
+    "osversie": "8.10",
+    "suma": true,
+    "uuid": "9c8b7a6d5e4f30211203f4e5d6c7b8a9",
+    "apiversie": "26",
+    "extraPackages": [
+      {
+        "release": "60.el8",
+        "name": "cvs",
+        "installtime": "2/17/23 1:22:10 PM CET",
+        "arch": "x86_64",
+        "version": "1.11.23"
+      },
+      {
+        "release": "1",
+        "name": "elastic-agent",
+        "installtime": "2/20/26 4:31:12 PM CET",
+        "arch": "x86_64",
+        "version": "8.19.7"
+      },
+      {
+        "release": "1.el8",
+        "name": "puppet-agent",
+        "installtime": "2/17/23 1:19:45 PM CET",
+        "arch": "x86_64",
+        "version": "7.20.0"
+      },
+      {
+        "release": "release1.el8",
+        "name": "zabbix-agent2",
+        "installtime": "4/13/26 4:22:03 AM CEST",
+        "arch": "x86_64",
+        "version": "6.0.45"
+      }
+    ],
+    "aantal": 4
+  },
+  {
+    "naam": "example9.com",
+    "beheergroep": "LINUX",
+    "beheeremail": "email9@example.com",
+    "datum": "07/28/26 06:55:00 AM CEST",
+    "owner": "LINUX",
+    "sl": "2",
+    "os": "Ubuntu",
+    "osversie": "22.04",
+    "suma": true,
+    "uuid": "5d4c3b2a19087f6e5d4c3b2a19087f6e",
+    "apiversie": "26",
+    "extraPackages": [
+      {
+        "release": "1",
+        "name": "elastic-agent",
+        "installtime": "2/20/26 4:40:18 PM CET",
+        "arch": "amd64",
+        "version": "8.19.7"
+      },
+      {
+        "release": "1jammy",
+        "name": "puppet-agent",
+        "installtime": "9/4/23 11:02:51 AM CEST",
+        "arch": "amd64",
+        "version": "7.20.0"
+      },
+      {
+        "release": "1+ubuntu22.04",
+        "name": "zabbix-agent2",
+        "installtime": "4/13/26 4:25:41 AM CEST",
+        "arch": "amd64",
+        "version": "1:6.0.45"
+      },
+      {
+        "release": "1+ubuntu22.04",
+        "name": "zabbix-sender",
+        "installtime": "4/13/26 4:25:44 AM CEST",
+        "arch": "amd64",
+        "version": "1:6.0.45"
+      }
+    ],
+    "aantal": 4
+  },
+  {
+    "naam": "example10.com",
+    "beheergroep": "LINUX",
+    "beheeremail": "email10@example.com",
+    "datum": "07/28/26 06:55:00 AM CEST",
+    "owner": "LINUX",
+    "sl": "3",
+    "os": "Ubuntu",
+    "osversie": "22.04",
+    "suma": true,
+    "uuid": "7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b",
+    "apiversie": "26",
+    "extraPackages": [
+      {
+        "release": "1",
+        "name": "elastic-agent",
+        "installtime": "10/8/25 9:14:27 AM CEST",
+        "arch": "amd64",
+        "version": "8.17.0"
+      },
+      {
+        "release": "1jammy",
+        "name": "puppet-agent",
+        "installtime": "9/4/23 11:05:12 AM CEST",
+        "arch": "amd64",
+        "version": "7.20.0"
+      },
+      {
+        "release": "1+ubuntu22.04",
+        "name": "zabbix-agent2",
+        "installtime": "11/20/25 10:52:09 AM CET",
+        "arch": "amd64",
+        "version": "1:6.0.42"
+      },
+      {
+        "release": "1+ubuntu22.04",
+        "name": "zabbix-sender",
+        "installtime": "11/20/25 10:52:12 AM CET",
+        "arch": "amd64",
+        "version": "1:6.0.42"
+      }
+    ],
+    "aantal": 4
+  },
+  {
+    "naam": "example11.com",
+    "beheergroep": "LINUX",
+    "beheeremail": "email11@example.com",
+    "datum": "07/28/26 06:55:00 AM CEST",
+    "owner": "LINUX",
+    "sl": "3",
+    "os": "Ubuntu",
+    "osversie": "24.04",
+    "suma": true,
+    "uuid": "1a2b3c4d5e6f708190a1b2c3d4e5f607",
+    "apiversie": "26",
+    "extraPackages": [
+      {
+        "release": "1noble",
+        "name": "puppet-agent",
+        "installtime": "8/19/25 2:37:55 PM CEST",
+        "arch": "amd64",
+        "version": "8.4.0"
+      },
+      {
+        "release": "1+ubuntu24.04",
+        "name": "zabbix-agent2",
+        "installtime": "4/13/26 4:28:02 AM CEST",
+        "arch": "amd64",
+        "version": "1:7.0.5"
+      }
+    ],
+    "aantal": 2
+  },
+  {
+    "naam": "example12.com",
+    "beheergroep": "SAP",
+    "beheeremail": "email12@example.com",
+    "datum": "07/28/26 06:55:00 AM CEST",
+    "owner": "SAP",
+    "sl": "2",
+    "os": "SLES",
+    "osversie": "12.5",
+    "suma": true,
+    "uuid": "b1c2d3e4f5a60718293a4b5c6d7e8f90",
+    "apiversie": "26",
+    "extraPackages": [
+      {
+        "release": "8.45.1",
+        "name": "cloud-init",
+        "installtime": "4/30/20 8:12:40 AM CEST",
+        "arch": "x86_64",
+        "version": "20.2"
+      },
+      {
+        "release": "1.sles12",
+        "name": "puppet-agent",
+        "installtime": "6/15/21 3:03:17 PM CEST",
+        "arch": "x86_64",
+        "version": "7.20.0"
+      },
+      {
+        "release": "release1.sles12",
+        "name": "zabbix-agent2",
+        "installtime": "11/20/25 10:58:33 AM CET",
+        "arch": "x86_64",
+        "version": "6.0.42"
+      }
+    ],
+    "aantal": 3
   }
 ]

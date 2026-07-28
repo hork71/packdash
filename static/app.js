@@ -54,6 +54,15 @@ function table(headers, rows, emptyText) {
 
 function goto(hash) { location.hash = hash; }
 
+function levelParams(state, params) {
+  params.delete("level");
+  if (state.level) {
+    const [os, rel] = state.level.split(" ");
+    params.set("os", os);
+    params.set("os_release", rel);
+  }
+}
+
 function pager(state, total, refresh) {
   const from = total === 0 ? 0 : state.offset + 1;
   const to = Math.min(state.offset + state.limit, total);
@@ -76,7 +85,9 @@ async function getFilterOpts() {
   if (!filterOpts) {
     const s = await api("stats");
     filterOpts = {
-      os: s.os_counts.map(r => r.os).filter(Boolean),
+      // drift levels, e.g. "RedHat 9" (os names contain no spaces,
+      // so "os os_release" splits back apart on the first space)
+      levels: s.os_counts.map(r => r.label).filter(Boolean).sort(),
       beheergroep: s.beheergroep_counts.map(r => r.beheergroep).filter(Boolean),
     };
   }
@@ -107,11 +118,11 @@ function barList(title, items, labelKey) {
     el("h3", {}, title),
     items.length
       ? items.map(item =>
-          el("div", { class: "bar-row", title: `${item[labelKey]}: ${item.n}` },
-            el("span", { class: "bar-label" }, item[labelKey] ?? "—"),
-            el("div", { class: "bar-track" },
-              el("div", { class: "bar-fill", style: `width:${(Number(item.n) / max) * 100}%` })),
-            el("span", { class: "bar-value" }, String(item.n))))
+        el("div", { class: "bar-row", title: `${item[labelKey]}: ${item.n}` },
+          el("span", { class: "bar-label" }, item[labelKey] ?? "—"),
+          el("div", { class: "bar-track" },
+            el("div", { class: "bar-fill", style: `width:${(Number(item.n) / max) * 100}%` })),
+          el("span", { class: "bar-value" }, String(item.n))))
       : el("p", { class: "muted" }, "No data."));
 }
 
@@ -138,7 +149,7 @@ async function dashboardView() {
           el("a", { href: "#/drift" }, `Open the full drift view (${drift.total}) →`))),
       el("div", { class: "rail" },
         barList("Active servers per beheergroep", s.beheergroep_counts, "beheergroep"),
-        barList("Active servers per OS", s.os_counts, "os"),
+        barList("Active servers per OS release", s.os_counts, "label"),
         barList("Most installed extra packages", s.top_packages, "name"))));
 }
 
@@ -146,11 +157,11 @@ async function dashboardView() {
 
 function driftTable(groups) {
   return table(
-    ["Package", "OS", "Version spread (newest first)", el("th", { class: "num" }, "Servers behind")],
+    ["Package", "OS release", "Version spread (newest first)", el("th", { class: "num" }, "Servers behind")],
     groups.map(g =>
       el("tr", { class: "clickable", onclick: () => goto(`#/packages/${g.package_id}`) },
         el("td", {}, g.name),
-        el("td", {}, g.os),
+        el("td", {}, `${g.os} ${g.os_release}`),
         el("td", {}, el("div", { class: "chips" }, g.versions.map(v =>
           el("span", { class: "chip " + (v.is_latest ? "chip-latest" : "chip-behind") },
             `${v.is_latest ? "✓" : "↓"} ${verLabel(v)} × ${v.server_count}`)))),
@@ -158,7 +169,7 @@ function driftTable(groups) {
     "No version drift found — every package is at one version per OS.");
 }
 
-const driftState = { q: "", os: "", beheergroep: "", limit: 50, offset: 0 };
+const driftState = { q: "", level: "", beheergroep: "", limit: 50, offset: 0 };
 
 async function driftView() {
   const opts = await getFilterOpts();
@@ -167,6 +178,7 @@ async function driftView() {
   async function refresh() {
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(driftState)) if (v) params.set(k, v);
+    levelParams(driftState, params);
     const data = await api("drift?" + params);
     results.replaceChildren(
       driftTable(data.items),
@@ -183,8 +195,8 @@ async function driftView() {
       el("h2", {}, "Package drift"),
       el("div", { class: "filters" },
         search,
-        select(opts.os, driftState.os, "All OS",
-          v => { driftState.os = v; driftState.offset = 0; refresh(); }),
+        select(opts.levels, driftState.level, "All OS releases",
+          v => { driftState.level = v; driftState.offset = 0; refresh(); }),
         select(opts.beheergroep, driftState.beheergroep, "All beheergroepen",
           v => { driftState.beheergroep = v; driftState.offset = 0; refresh(); }))),
     results);
@@ -193,7 +205,7 @@ async function driftView() {
 
 /* ---------- servers ---------- */
 
-const serverState = { q: "", beheergroep: "", os: "", status: "", sort: "hostname", dir: "asc", limit: 50, offset: 0 };
+const serverState = { q: "", beheergroep: "", level: "", status: "", sort: "hostname", dir: "asc", limit: 50, offset: 0 };
 
 async function serversView() {
   const opts = await getFilterOpts();
@@ -220,6 +232,7 @@ async function serversView() {
   async function refresh() {
     const params = new URLSearchParams();
     for (const [k, v] of Object.entries(serverState)) if (v) params.set(k, v);
+    levelParams(serverState, params);
     const data = await api("servers?" + params);
     results.replaceChildren(table(
       [
@@ -260,8 +273,8 @@ async function serversView() {
         }),
         select(opts.beheergroep, serverState.beheergroep, "All beheergroepen",
           v => { serverState.beheergroep = v; serverState.offset = 0; refresh(); }),
-        select(opts.os, serverState.os, "All OS",
-          v => { serverState.os = v; serverState.offset = 0; refresh(); }),
+        select(opts.levels, serverState.level, "All OS releases",
+          v => { serverState.level = v; serverState.offset = 0; refresh(); }),
         select(["ACTIVE", "MISSING", "DECOMMISSIONED"], serverState.status, "All statuses",
           v => { serverState.status = v; serverState.offset = 0; refresh(); }))),
     results);
@@ -287,7 +300,7 @@ async function serverDetailView(id) {
           el("td", {}, p.is_latest
             ? el("span", { class: "badge badge-good" }, "latest")
             : el("span", { class: "badge badge-warn" },
-                `behind → ${p.latest_version}-${p.latest_release}`)))),
+              `behind → ${p.latest_version}-${p.latest_release}`)))),
       onlyOutdated ? "No outdated packages on this server." : "No extra packages recorded."));
   }
 
@@ -330,7 +343,7 @@ async function packagesView() {
     const data = await api("packages?" + params);
     results.replaceChildren(table(
       ["Package", el("th", { class: "num" }, "Versions"),
-       el("th", { class: "num" }, "Servers"), "Drift"],
+        el("th", { class: "num" }, "Servers"), "Drift"],
       data.items.map(p =>
         el("tr", { class: "clickable", onclick: () => goto(`#/packages/${p.id}`) },
           el("td", {}, p.name),
@@ -361,25 +374,26 @@ async function packageDetailView(id) {
     el("h2", {}, pkg.name),
     el("div", {}, pkg.os_groups.length
       ? pkg.os_groups.map(group =>
-          el("section", { class: "os-group" },
-            el("h3", {},
-              `${group.os} `,
-              group.drifting
-                ? el("span", { class: "badge badge-warn" }, "drift")
-                : el("span", { class: "badge badge-good" }, "in sync")),
-            group.versions.map(v =>
-              el("div", { class: "version-block" },
-                el("div", { class: "version-head" },
-                  el("span", { class: "chip " + (v.is_latest ? "chip-latest" : "chip-behind") },
-                    `${v.is_latest ? "✓ newest" : "↓ behind"} ${verLabel(v)}`),
-                  el("span", { class: "muted" }, v.arch)),
-                table(["Server", "Beheergroep", "Status", "Installed"],
-                  v.servers.map(s =>
-                    el("tr", { class: "clickable", onclick: () => goto(`#/servers/${s.id}`) },
-                      el("td", {}, s.hostname),
-                      el("td", {}, s.beheergroep ?? "—"),
-                      el("td", {}, statusBadge(s.inventory_status)),
-                      el("td", {}, fmtDate(s.install_time)))))))))
+        el("section", { class: "os-group" },
+          el("h3", {},
+            `${group.os} ${group.os_release} `,
+            group.drifting
+              ? el("span", { class: "badge badge-warn" }, "drift")
+              : el("span", { class: "badge badge-good" }, "in sync")),
+          group.versions.map(v =>
+            el("div", { class: "version-block" },
+              el("div", { class: "version-head" },
+                el("span", { class: "chip " + (v.is_latest ? "chip-latest" : "chip-behind") },
+                  `${v.is_latest ? "✓ newest" : "↓ behind"} ${verLabel(v)}`),
+                el("span", { class: "muted" }, v.arch)),
+              table(["Server", "Beheergroep", "Osversie", "Status", "Installed"],
+                v.servers.map(s =>
+                  el("tr", { class: "clickable", onclick: () => goto(`#/servers/${s.id}`) },
+                    el("td", {}, s.hostname),
+                    el("td", {}, s.beheergroep ?? "—"),
+                    el("td", {}, s.osversie ?? "—"),
+                    el("td", {}, statusBadge(s.inventory_status)),
+                    el("td", {}, fmtDate(s.install_time)))))))))
       : el("p", { class: "muted" }, "This package is not installed on any tracked server.")));
 }
 
@@ -391,7 +405,7 @@ async function runsView() {
     el("h2", {}, "Inventory runs"),
     table(
       [el("th", { class: "num" }, "ID"), "Source", "Started", "Completed",
-       el("th", { class: "num" }, "Servers in file")],
+      el("th", { class: "num" }, "Servers in file")],
       runs.map(r =>
         el("tr", {},
           el("td", { class: "num" }, String(r.id)),

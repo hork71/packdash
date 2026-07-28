@@ -55,9 +55,25 @@ def rpmvercmp(a, b):
         i += 1
 
 
+def _split_epoch(version):
+    """Split an optional leading epoch ("1:2.3.4" -> (1, "2.3.4")).
+
+    Debian/Ubuntu versions carry epochs; rpm stores them separately so
+    they rarely appear in rpm version strings, but handle both.
+    """
+    head, sep, rest = version.partition(":")
+    if sep and head.isdigit():
+        return int(head), rest
+    return 0, version
+
+
 def compare_vr(a, b):
-    """Compare two (version, release) tuples."""
-    c = rpmvercmp(a[0], b[0])
+    """Compare two (version, release) tuples; epoch beats everything."""
+    ea, va = _split_epoch(a[0])
+    eb, vb = _split_epoch(b[0])
+    if ea != eb:
+        return 1 if ea > eb else -1
+    c = rpmvercmp(va, vb)
     if c != 0:
         return c
     return rpmvercmp(a[1], b[1])

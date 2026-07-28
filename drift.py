@@ -1,6 +1,6 @@
 """Materialize package drift after an import.
 
-Computes, per (package, os) group, the newest installed version
+Computes, per (package, os, os_release) level, the newest installed version
 (rpmvercmp, judged among ACTIVE servers) and stores the result in
 package_drift plus the server_packages.is_latest flag. The API then
 only runs small indexed queries instead of scanning the whole
@@ -26,7 +26,7 @@ def materialize(cur):
     Returns (group_count, drifting_count).
     """
     cur.execute("""
-        SELECT pv.package_id, s.os, s.inventory_status,
+        SELECT pv.package_id, s.os, s.os_release, s.inventory_status,
                pv.id, pv.version, pv.release
         FROM server_packages sp
         JOIN servers s ON s.id = sp.server_id
@@ -34,8 +34,9 @@ def materialize(cur):
     """)
 
     groups = {}
-    for package_id, os_name, status, version_id, version, release in cur.fetchall():
-        versions = groups.setdefault((package_id, os_name), {})
+    for package_id, os_name, os_release, status, version_id, version, release \
+            in cur.fetchall():
+        versions = groups.setdefault((package_id, os_name, os_release), {})
         entry = versions.setdefault(version_id, {
             "vr": (version, release),
             "active": 0,
@@ -44,7 +45,7 @@ def materialize(cur):
             entry["active"] += 1
 
     rows = []
-    for (package_id, os_name), versions in groups.items():
+    for (package_id, os_name, os_release), versions in groups.items():
         active_ids = [vid for vid, e in versions.items() if e["active"]]
 
         # "Latest" is judged among versions an ACTIVE server still runs;
@@ -58,6 +59,7 @@ def materialize(cur):
         rows.append((
             package_id,
             os_name,
+            os_release,
             latest_id,
             len(active_ids),
             sum(e["active"] for e in versions.values()),
@@ -68,7 +70,7 @@ def materialize(cur):
 
     execute_values(cur, """
         INSERT INTO package_drift(
-            package_id, os, latest_version_id,
+            package_id, os, os_release, latest_version_id,
             version_count, server_count, behind_count
         )
         VALUES %s
@@ -82,9 +84,10 @@ def materialize(cur):
           AND pv.id = sp.package_version_id
           AND pd.package_id = pv.package_id
           AND pd.os = s.os
+          AND pd.os_release = s.os_release
     """)
 
-    drifting = sum(1 for r in rows if r[3] > 1)
+    drifting = sum(1 for r in rows if r[4] > 1)
     return len(rows), drifting
 
 

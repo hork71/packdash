@@ -68,12 +68,21 @@ CREATE INDEX idx_package_versions_pkg ON package_versions(package_id);
 CREATE INDEX idx_servers_beheergroep ON servers(beheergroep);
 CREATE INDEX idx_servers_status ON servers(inventory_status);
 
--- Drift materialization (see migrate_drift.sql for existing databases):
+-- Drift materialization (see migrate_drift.sql and
+-- migrate_drift_levels.sql for existing databases):
 -- filled by drift.py after every import, read by the API.
+-- Drift levels are (package, os, os_release), where os_release is the
+-- normalized release (RedHat/SUSE major, Ubuntu major.minor; oslevel.py).
+
+ALTER TABLE servers
+ADD COLUMN os_release VARCHAR(20) NOT NULL DEFAULT 'unknown';
+
+CREATE INDEX idx_servers_os_release ON servers(os, os_release);
 
 CREATE TABLE package_drift (
     package_id BIGINT NOT NULL REFERENCES packages(id),
     os VARCHAR(20) NOT NULL,
+    os_release VARCHAR(20) NOT NULL,
     latest_version_id BIGINT NOT NULL REFERENCES package_versions(id),
 
     -- counts over ACTIVE servers only
@@ -81,7 +90,7 @@ CREATE TABLE package_drift (
     server_count INTEGER NOT NULL,
     behind_count INTEGER NOT NULL,
 
-    PRIMARY KEY (package_id, os)
+    PRIMARY KEY (package_id, os, os_release)
 );
 
 ALTER TABLE server_packages

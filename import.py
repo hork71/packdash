@@ -5,6 +5,7 @@ import psycopg2
 from psycopg2.extras import execute_values
 
 import drift
+import oslevel
 
 
 def parse_install_time(value):
@@ -89,6 +90,7 @@ for server in servers:
         servicelevel,
         os,
         osversie,
+        os_release,
         suma,
         apiversie,
 
@@ -98,7 +100,7 @@ for server in servers:
 
     )
     VALUES (
-        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
+        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
         'ACTIVE',
         NOW(),
         %s
@@ -115,6 +117,7 @@ for server in servers:
         servicelevel = EXCLUDED.servicelevel,
         os = EXCLUDED.os,
         osversie = EXCLUDED.osversie,
+        os_release = EXCLUDED.os_release,
         suma = EXCLUDED.suma,
         apiversie = EXCLUDED.apiversie,
 
@@ -131,6 +134,7 @@ for server in servers:
         server["sl"],
         server["os"],
         server["osversie"],
+        oslevel.os_release(server["os"], server["osversie"]),
         server["suma"],
         server["apiversie"],
         inventory_run_id

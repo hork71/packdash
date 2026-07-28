@@ -51,11 +51,13 @@ def stats():
         GROUP BY inventory_status
     """)
     os_counts = db.query("""
-        SELECT os, COUNT(*) AS n
+        SELECT os, os_release,
+               os || ' ' || os_release AS label,
+               COUNT(*) AS n
         FROM servers
         WHERE inventory_status = 'ACTIVE'
-        GROUP BY os
-        ORDER BY n DESC, os
+        GROUP BY os, os_release
+        ORDER BY n DESC, os, os_release
     """)
     beheergroep_counts = db.query("""
         SELECT beheergroep, COUNT(*) AS n
@@ -118,6 +120,7 @@ def servers():
     for field, column in (
         ("beheergroep", "s.beheergroep"),
         ("os", "s.os"),
+        ("os_release", "s.os_release"),
         ("status", "s.inventory_status"),
     ):
         value = request.args.get(field)
@@ -173,7 +176,9 @@ def server_detail(server_id):
         JOIN packages p ON p.id = pv.package_id
         JOIN servers s ON s.id = sp.server_id
         LEFT JOIN package_drift pd
-               ON pd.package_id = pv.package_id AND pd.os = s.os
+               ON pd.package_id = pv.package_id
+              AND pd.os = s.os
+              AND pd.os_release = s.os_release
         LEFT JOIN package_versions lv ON lv.id = pd.latest_version_id
         WHERE sp.server_id = %s
         ORDER BY p.name
@@ -219,16 +224,17 @@ def package_detail(package_id):
     if not pkg:
         abort(404)
 
-    latest_ids = {r["os"]: r["latest_version_id"] for r in db.query("""
-        SELECT os, latest_version_id
+    latest_ids = {(r["os"], r["os_release"]): r["latest_version_id"]
+                  for r in db.query("""
+        SELECT os, os_release, latest_version_id
         FROM package_drift
         WHERE package_id = %s
     """, (package_id,))}
 
     rows = db.query("""
-        SELECT s.os, s.inventory_status,
+        SELECT s.os, s.os_release, s.inventory_status,
                pv.id AS version_id, pv.version, pv.release, pv.arch,
-               s.id AS server_id, s.hostname, s.beheergroep,
+               s.id AS server_id, s.hostname, s.beheergroep, s.osversie,
                sp.install_time
         FROM server_packages sp
         JOIN servers s ON s.id = sp.server_id
@@ -237,14 +243,14 @@ def package_detail(package_id):
         ORDER BY s.hostname
     """, (package_id,))
 
-    by_os = {}
+    by_level = {}
     for row in rows:
-        by_os.setdefault(row["os"], {}).setdefault(
+        by_level.setdefault((row["os"], row["os_release"]), {}).setdefault(
             (row["version"], row["release"]), []).append(row)
 
     os_groups = []
-    for os_name, versions in sorted(by_os.items()):
-        latest_id = latest_ids.get(os_name)
+    for (os_name, os_release), versions in sorted(by_level.items()):
+        latest_id = latest_ids.get((os_name, os_release))
 
         vlist = []
         for vkey in sorted(versions, key=rpmver.vr_key, reverse=True):
@@ -257,6 +263,7 @@ def package_detail(package_id):
                 "servers": clean([{
                     "id": r["server_id"],
                     "hostname": r["hostname"],
+                    "osversie": r["osversie"],
                     "beheergroep": r["beheergroep"],
                     "inventory_status": r["inventory_status"],
                     "install_time": r["install_time"],
@@ -264,6 +271,7 @@ def package_detail(package_id):
             })
         os_groups.append({
             "os": os_name,
+            "os_release": os_release,
             "drifting": len(vlist) > 1,
             "versions": vlist,
         })
@@ -284,6 +292,10 @@ def drift():
     if os_filter:
         where.append("pd.os = %s")
         params.append(os_filter)
+    os_release = request.args.get("os_release")
+    if os_release:
+        where.append("pd.os_release = %s")
+        params.append(os_release)
     q = request.args.get("q")
     if q:
         where.append("p.name ILIKE %s")
@@ -298,6 +310,7 @@ def drift():
             JOIN package_versions pv ON pv.id = sp.package_version_id
             WHERE pv.package_id = pd.package_id
               AND s.os = pd.os
+              AND s.os_release = pd.os_release
               AND s.inventory_status = 'ACTIVE'
               AND s.beheergroep = %s
         )""")
@@ -312,35 +325,37 @@ def drift():
     """, params)[0]["n"]
 
     groups = clean(db.query(f"""
-        SELECT pd.package_id, p.name, pd.os, pd.behind_count
+        SELECT pd.package_id, p.name, pd.os, pd.os_release, pd.behind_count
         FROM package_drift pd
         JOIN packages p ON p.id = pd.package_id
         WHERE {where_sql}
-        ORDER BY pd.behind_count DESC, p.name, pd.os
+        ORDER BY pd.behind_count DESC, p.name, pd.os, pd.os_release
         LIMIT %s OFFSET %s
     """, params + [limit, offset]))
 
     # Version spread for just this page of groups.
     if groups:
-        keys = tuple((g["package_id"], g["os"]) for g in groups)
+        keys = tuple((g["package_id"], g["os"], g["os_release"]) for g in groups)
         spread = db.query("""
-            SELECT pv.package_id, s.os, pv.version, pv.release,
+            SELECT pv.package_id, s.os, s.os_release, pv.version, pv.release,
                    sp.is_latest, MIN(pv.arch) AS arch,
                    COUNT(*) AS server_count
             FROM server_packages sp
             JOIN servers s ON s.id = sp.server_id
             JOIN package_versions pv ON pv.id = sp.package_version_id
             WHERE s.inventory_status = 'ACTIVE'
-              AND (pv.package_id, s.os) IN %s
-            GROUP BY pv.package_id, s.os, pv.version, pv.release, sp.is_latest
+              AND (pv.package_id, s.os, s.os_release) IN %s
+            GROUP BY pv.package_id, s.os, s.os_release,
+                     pv.version, pv.release, sp.is_latest
         """, (keys,))
 
         by_key = {}
         for row in spread:
-            by_key.setdefault((row["package_id"], row["os"]), []).append(row)
+            by_key.setdefault(
+                (row["package_id"], row["os"], row["os_release"]), []).append(row)
 
         for g in groups:
-            versions = by_key.get((g["package_id"], g["os"]), [])
+            versions = by_key.get((g["package_id"], g["os"], g["os_release"]), [])
             versions.sort(
                 key=lambda v: rpmver.vr_key((v["version"], v["release"])),
                 reverse=True)
