@@ -3,6 +3,7 @@ import asyncio
 import aiohttp
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import http.client
 from zoneinfo import ZoneInfo
 import json
 import os
@@ -158,6 +159,11 @@ def build_suma_lookup(sources):
 
 _thread_local = threading.local()
 
+# Fouten die op een dode keep-alive verbinding wijzen (de server of een
+# load balancer sluit inactieve verbindingen; de volgende call krijgt
+# dan bv. SSLEOFError). Die verdienen een verse verbinding en 1 retry.
+_STALE_CONNECTION_ERRORS = (ssl.SSLError, ConnectionError, http.client.RemoteDisconnected)
+
 def source_client(source):
     """ServerProxy per thread per endpoint (ServerProxy is niet
     thread-safe); de ingelogde sessie-sleutel wordt wel gedeeld."""
@@ -171,6 +177,13 @@ def source_client(source):
         client = ServerProxy(source['url'], context=context)
         clients[source['name']] = client
     return client
+
+def drop_source_client(source):
+    """Gooi de client van deze thread weg zodat de volgende
+    source_client() een verse verbinding opzet."""
+    clients = getattr(_thread_local, 'clients', None)
+    if clients:
+        clients.pop(source['name'], None)
 
 
 async def fetch_server_data(puppet_tuples, suma_lookup):
@@ -193,13 +206,25 @@ async def fetch_server_data(puppet_tuples, suma_lookup):
             match = suma_lookup.get(server_tuple[0])
             if match:
                 source = match['source']
-                client = source_client(source)
                 uitkomst['suma'] = True
-                uuid = client.system.getUuid(source['session'], match['id'])
-                uitkomst['uuid'] = uuid
                 uitkomst['apiversie'] = source['apiversie']
+
+                # Een gestorven keep-alive verbinding geeft een verse
+                # verbinding en 1 nieuwe poging; de sessie-sleutel
+                # blijft geldig, dus opnieuw inloggen is niet nodig.
+                for poging in (0, 1):
+                    try:
+                        client = source_client(source)
+                        uuid = client.system.getUuid(source['session'], match['id'])
+                        noncompliant = client.system.listExtraPackages(source['session'], match['id'])
+                        break
+                    except _STALE_CONNECTION_ERRORS:
+                        drop_source_client(source)
+                        if poging:
+                            raise
+
+                uitkomst['uuid'] = uuid
                 uitkomst['extraPackages']  = []
-                noncompliant = client.system.listExtraPackages(source['session'], match['id'])
                 if noncompliant:
                     uitkomst['extraPackages'] = noncompliant
                 uitkomst['aantal']  = len(noncompliant)
