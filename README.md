@@ -6,6 +6,8 @@ seen on the same OS.
 
 ## Components
 
+- `suma.py` — collects the inventory from PuppetDB + one or more SUSE Manager
+  endpoints and writes `xtra.json`
 - `setup.sql` — database schema + indexes (PostgreSQL, database `extrap`, role `testuser`)
 - `migrate_drift.sql` — one-time migration for databases created before drift materialization
 - `migrate_drift_levels.sql` — one-time migration for per-OS-release drift levels
@@ -41,6 +43,26 @@ psql -U testuser -d extrap -f migrate_drift.sql
 psql -U testuser -d extrap -f migrate_drift_levels.sql
 python import.py      # or: python drift.py (rebuild without importing)
 ```
+
+## Collecting the inventory (suma.py)
+
+`suma.py` reads its configuration from `.env` (never committed). Multiple
+SUSE Manager endpoints — e.g. during a migration — are queried in one run:
+
+```
+SUMA_SOURCES=suma4,suma5
+SUMA4_URL=https://suma4.example.com/rpc/api
+SUMA5_URL=https://suma5.example.com/rpc/api
+SUMA_USER=...          # shared; override per endpoint with SUMA4_USER etc.
+SUMA_KEY=...
+OUTPUT_FILE=xtra.json  # default
+```
+
+A server registered in more than one SUMA resolves to the registration
+with the newest `last_checkin` (ties go to the last-listed source). If any
+configured endpoint is unreachable the run aborts, so a half-blind run
+never reaches `xtra.json`. Without `SUMA_SOURCES` the old single
+`SUMA_URL` behaviour applies.
 
 ## Notes
 
