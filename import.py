@@ -9,10 +9,21 @@ import oslevel
 
 
 def parse_install_time(value):
-    """Convert RPM install time to datetime."""
+    """Convert RPM install time to datetime.
+
+    Two incoming formats:
+      "3/29/22 3:53:58 PM CEST" (suma4)
+      "20180323T18:16:34"       (suma5, xmlrpc DateTime)
+    """
 
     if not value:
         return None
+
+    if "T" in value and " " not in value:
+        return datetime.strptime(
+            value,
+            "%Y%m%dT%H:%M:%S"
+        )
 
     value = value.rsplit(" ", 1)[0]
 

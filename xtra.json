@@ -817,14 +817,14 @@
       {
         "release": "1noble",
         "name": "puppet-agent",
-        "installtime": "8/19/25 2:37:55 PM CEST",
+        "installtime": "20250819T14:37:55",
         "arch": "amd64",
         "version": "8.4.0"
       },
       {
         "release": "1+ubuntu24.04",
         "name": "zabbix-agent2",
-        "installtime": "4/13/26 4:28:02 AM CEST",
+        "installtime": "20260413T04:28:02",
         "arch": "amd64",
         "version": "1:7.0.5"
       }
