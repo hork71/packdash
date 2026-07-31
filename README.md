@@ -26,13 +26,18 @@ python3 -m venv .venv
 psql -d postgres -c "CREATE ROLE testuser LOGIN;" -c "CREATE DATABASE extrap OWNER testuser;"
 psql -U testuser -d extrap -f setup.sql
 
-.venv/bin/python import.py     # loads xtra.json
+.venv/bin/python import.py     # loads xtra.json (or: import.py <file>)
 .venv/bin/python app.py        # serves http://localhost:8000
 ```
 
-Database connection settings for the app come from the standard `PGHOST`,
-`PGDATABASE`, `PGUSER`, `PGPASSWORD` environment variables (defaults match
-`import.py`: localhost / extrap / testuser).
+Database connection settings for the app, importer and drift scripts all
+come from the standard `PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`
+environment variables (defaults: localhost / extrap / testuser).
+
+The importer is built for full `listInstalledPackages` inventories: it
+preloads the package/version dimension tables, bulk-inserts new ones, and
+COPYs the server/package links through a staging table — ~3M package
+entries import in a few minutes.
 
 ## Upgrading an existing database
 
