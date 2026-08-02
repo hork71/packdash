@@ -104,6 +104,24 @@ function select(id, options, value, allLabel, onchange) {
     }));
 }
 
+// Type-to-search select: a text input backed by a <datalist> so an item
+// can be clicked from the native dropdown or found by typing. Filtering
+// against the typed value is the caller's job (usually a substring
+// match server-side, same as the plain search boxes).
+function combobox(id, options, value, placeholder, onchange) {
+  const listId = `${id}-list`;
+  const input = el("input", {
+    id, type: "search", list: listId, placeholder,
+    value: value || "",
+    oninput: debounce(e => onchange(e.target.value), 250),
+  });
+  const datalist = el("datalist", { id: listId },
+    options.map(o => el("option", { value: o })));
+  // display:contents so the wrapper doesn't become an extra flex item
+  // in .filters — only the input takes up space, the datalist renders nothing.
+  return el("span", { style: "display:contents" }, input, datalist);
+}
+
 /* ---------- dashboard ---------- */
 
 function tile(label, value, href) {
@@ -198,7 +216,7 @@ async function driftView() {
         search,
         select("drift-level", opts.levels, driftState.level, "All OS releases",
           v => { driftState.level = v; driftState.offset = 0; refresh(); }),
-        select("drift-beheergroep", opts.beheergroep, driftState.beheergroep, "All beheergroepen",
+        combobox("drift-beheergroep", opts.beheergroep, driftState.beheergroep, "All beheergroepen",
           v => { driftState.beheergroep = v; driftState.offset = 0; refresh(); }))),
     results);
   refresh();
@@ -273,7 +291,7 @@ async function serversView() {
           type: "search", placeholder: "Search hostname…", value: serverState.q,
           oninput: debounce(e => { serverState.q = e.target.value; serverState.offset = 0; refresh(); }, 250),
         }),
-        select("server-beheergroep", opts.beheergroep, serverState.beheergroep, "All beheergroepen",
+        combobox("server-beheergroep", opts.beheergroep, serverState.beheergroep, "All beheergroepen",
           v => { serverState.beheergroep = v; serverState.offset = 0; refresh(); }),
         select("server-level", opts.levels, serverState.level, "All OS releases",
           v => { serverState.level = v; serverState.offset = 0; refresh(); }),

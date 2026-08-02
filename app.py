@@ -118,7 +118,6 @@ def servers():
     where = []
     params = []
     for field, column in (
-        ("beheergroep", "s.beheergroep"),
         ("os", "s.os"),
         ("os_release", "s.os_release"),
         ("status", "s.inventory_status"),
@@ -127,6 +126,10 @@ def servers():
         if value:
             where.append(f"{column} = %s")
             params.append(value)
+    beheergroep = request.args.get("beheergroep")
+    if beheergroep:
+        where.append("s.beheergroep ILIKE %s")
+        params.append(f"%{beheergroep}%")
     q = request.args.get("q")
     if q:
         where.append("s.hostname ILIKE %s")
@@ -312,9 +315,9 @@ def drift():
               AND s.os = pd.os
               AND s.os_release = pd.os_release
               AND s.inventory_status = 'ACTIVE'
-              AND s.beheergroep = %s
+              AND s.beheergroep ILIKE %s
         )""")
-        params.append(beheergroep)
+        params.append(f"%{beheergroep}%")
 
     where_sql = " AND ".join(where)
     total = db.query(f"""
