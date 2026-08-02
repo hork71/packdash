@@ -94,8 +94,8 @@ async function getFilterOpts() {
   return filterOpts;
 }
 
-function select(options, value, allLabel, onchange) {
-  return el("select", { onchange: e => onchange(e.target.value) },
+function select(id, options, value, allLabel, onchange) {
+  return el("select", { id, onchange: e => onchange(e.target.value) },
     el("option", { value: "" }, allLabel),
     options.map(o => {
       const opt = el("option", { value: o }, o);
@@ -186,6 +186,7 @@ async function driftView() {
   }
 
   const search = el("input", {
+    id: "drift-search",
     type: "search", placeholder: "Filter packages…", value: driftState.q,
     oninput: debounce(e => { driftState.q = e.target.value; driftState.offset = 0; refresh(); }, 250),
   });
@@ -195,9 +196,9 @@ async function driftView() {
       el("h2", {}, "Package drift"),
       el("div", { class: "filters" },
         search,
-        select(opts.levels, driftState.level, "All OS releases",
+        select("drift-level", opts.levels, driftState.level, "All OS releases",
           v => { driftState.level = v; driftState.offset = 0; refresh(); }),
-        select(opts.beheergroep, driftState.beheergroep, "All beheergroepen",
+        select("drift-beheergroep", opts.beheergroep, driftState.beheergroep, "All beheergroepen",
           v => { driftState.beheergroep = v; driftState.offset = 0; refresh(); }))),
     results);
   refresh();
@@ -268,14 +269,15 @@ async function serversView() {
       el("h2", {}, "Servers"),
       el("div", { class: "filters" },
         el("input", {
+          id: "server-search",
           type: "search", placeholder: "Search hostname…", value: serverState.q,
           oninput: debounce(e => { serverState.q = e.target.value; serverState.offset = 0; refresh(); }, 250),
         }),
-        select(opts.beheergroep, serverState.beheergroep, "All beheergroepen",
+        select("server-beheergroep", opts.beheergroep, serverState.beheergroep, "All beheergroepen",
           v => { serverState.beheergroep = v; serverState.offset = 0; refresh(); }),
-        select(opts.levels, serverState.level, "All OS releases",
+        select("server-level", opts.levels, serverState.level, "All OS releases",
           v => { serverState.level = v; serverState.offset = 0; refresh(); }),
-        select(["ACTIVE", "MISSING", "DECOMMISSIONED"], serverState.status, "All statuses",
+        select("server-status", ["ACTIVE", "MISSING", "DECOMMISSIONED"], serverState.status, "All statuses",
           v => { serverState.status = v; serverState.offset = 0; refresh(); }))),
     results);
   refresh();
@@ -322,6 +324,7 @@ async function serverDetailView(id) {
     el("div", { class: "filters" },
       el("label", { class: "check" },
         el("input", {
+          id: "only-outdated",
           type: "checkbox",
           onchange: e => { onlyOutdated = e.target.checked; refresh(); },
         }),
@@ -361,6 +364,7 @@ async function packagesView() {
       el("h2", {}, "Packages"),
       el("div", { class: "filters" },
         el("input", {
+          id: "package-search",
           type: "search", placeholder: "Search packages…", value: packageState.q,
           oninput: debounce(e => { packageState.q = e.target.value; packageState.offset = 0; refresh(); }, 250),
         }))),
