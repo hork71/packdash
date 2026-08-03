@@ -286,38 +286,20 @@ def package_detail(package_id):
     })
 
 
-@app.get("/api/drift")
-def drift():
-    limit, offset = page_params()
+def _drift_fleet(os_filter, os_release, q, limit, offset):
+    """Fleet-wide drift: read straight from the materialized package_drift
+    table, so the common (unfiltered) case stays a fast indexed read."""
     where = ["pd.version_count > 1"]
     params = []
-    os_filter = request.args.get("os")
     if os_filter:
         where.append("pd.os = %s")
         params.append(os_filter)
-    os_release = request.args.get("os_release")
     if os_release:
         where.append("pd.os_release = %s")
         params.append(os_release)
-    q = request.args.get("q")
     if q:
         where.append("p.name ILIKE %s")
         params.append(f"%{q}%")
-    beheergroep = request.args.get("beheergroep")
-    if beheergroep:
-        # Groups with at least one active server in this beheergroep;
-        # "latest" itself stays fleet-wide.
-        where.append("""EXISTS (
-            SELECT 1 FROM server_packages sp
-            JOIN servers s ON s.id = sp.server_id
-            JOIN package_versions pv ON pv.id = sp.package_version_id
-            WHERE pv.package_id = pd.package_id
-              AND s.os = pd.os
-              AND s.os_release = pd.os_release
-              AND s.inventory_status = 'ACTIVE'
-              AND s.beheergroep ILIKE %s
-        )""")
-        params.append(f"%{beheergroep}%")
 
     where_sql = " AND ".join(where)
     total = db.query(f"""
@@ -336,21 +318,96 @@ def drift():
         LIMIT %s OFFSET %s
     """, params + [limit, offset]))
 
-    # Version spread for just this page of groups.
+    return total, groups
+
+
+def _drift_scoped(beheergroep, os_filter, os_release, q, limit, offset):
+    """Drift within one beheergroep, computed live against each server's
+    stored is_latest flag (still judged against the fleet-wide latest
+    version — the reference point stays fleet-wide, only what's measured
+    against it is scoped). A package only appears if this beheergroep
+    itself has a server behind, so packages fully in sync here drop out
+    even when the fleet as a whole is drifting on them.
+    """
+    where = ["s.inventory_status = 'ACTIVE'", "s.beheergroep ILIKE %s"]
+    params = [f"%{beheergroep}%"]
+    if os_filter:
+        where.append("s.os = %s")
+        params.append(os_filter)
+    if os_release:
+        where.append("s.os_release = %s")
+        params.append(os_release)
+    if q:
+        where.append("p.name ILIKE %s")
+        params.append(f"%{q}%")
+
+    where_sql = " AND ".join(where)
+    behind_having = "HAVING COUNT(*) FILTER (WHERE NOT sp.is_latest) > 0"
+
+    total = db.query(f"""
+        SELECT COUNT(*) AS n FROM (
+            SELECT 1
+            FROM server_packages sp
+            JOIN servers s ON s.id = sp.server_id
+            JOIN package_versions pv ON pv.id = sp.package_version_id
+            JOIN packages p ON p.id = pv.package_id
+            WHERE {where_sql}
+            GROUP BY pv.package_id, s.os, s.os_release
+            {behind_having}
+        ) AS drifting_groups
+    """, params)[0]["n"]
+
+    groups = clean(db.query(f"""
+        SELECT pv.package_id, p.name, s.os, s.os_release,
+               COUNT(*) FILTER (WHERE NOT sp.is_latest) AS behind_count
+        FROM server_packages sp
+        JOIN servers s ON s.id = sp.server_id
+        JOIN package_versions pv ON pv.id = sp.package_version_id
+        JOIN packages p ON p.id = pv.package_id
+        WHERE {where_sql}
+        GROUP BY pv.package_id, p.name, s.os, s.os_release
+        {behind_having}
+        ORDER BY behind_count DESC, p.name, s.os, s.os_release
+        LIMIT %s OFFSET %s
+    """, params + [limit, offset]))
+
+    return total, groups
+
+
+@app.get("/api/drift")
+def drift():
+    limit, offset = page_params()
+    os_filter = request.args.get("os")
+    os_release = request.args.get("os_release")
+    q = request.args.get("q")
+    beheergroep = request.args.get("beheergroep")
+
+    if beheergroep:
+        total, groups = _drift_scoped(beheergroep, os_filter, os_release, q, limit, offset)
+    else:
+        total, groups = _drift_fleet(os_filter, os_release, q, limit, offset)
+
+    # Version spread for just this page of groups, scoped the same way.
     if groups:
         keys = tuple((g["package_id"], g["os"], g["os_release"]) for g in groups)
-        spread = db.query("""
+        spread_where = ["s.inventory_status = 'ACTIVE'",
+                         "(pv.package_id, s.os, s.os_release) IN %s"]
+        spread_params = [keys]
+        if beheergroep:
+            spread_where.append("s.beheergroep ILIKE %s")
+            spread_params.append(f"%{beheergroep}%")
+
+        spread = db.query(f"""
             SELECT pv.package_id, s.os, s.os_release, pv.version, pv.release,
                    sp.is_latest, MIN(pv.arch) AS arch,
                    COUNT(*) AS server_count
             FROM server_packages sp
             JOIN servers s ON s.id = sp.server_id
             JOIN package_versions pv ON pv.id = sp.package_version_id
-            WHERE s.inventory_status = 'ACTIVE'
-              AND (pv.package_id, s.os, s.os_release) IN %s
+            WHERE {" AND ".join(spread_where)}
             GROUP BY pv.package_id, s.os, s.os_release,
                      pv.version, pv.release, sp.is_latest
-        """, (keys,))
+        """, spread_params)
 
         by_key = {}
         for row in spread:
