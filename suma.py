@@ -3,19 +3,17 @@ import asyncio
 import aiohttp
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-import http.client
-from zoneinfo import ZoneInfo
 import json
 import os
 import requests
-import ssl
 import sys
-import threading
 from typing import List, Tuple, Any
 import xmlrpc.client
-from xmlrpc.client import ServerProxy
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
+
+import sumaclient
 
 load_dotenv()
 
@@ -63,51 +61,6 @@ async def fetch_fact_data(session, node):
     return (node, beheergroep, beheeremail, owner, sl, oper, operversie)
 
 
-def load_suma_sources():
-    """SUMA endpoints uit de omgeving.
-
-    SUMA_SOURCES=suma4,suma5 met per endpoint SUMA4_URL, SUMA5_URL enz.
-    SUMA4_USER/SUMA4_KEY zijn optioneel en vallen terug op SUMA_USER en
-    SUMA_KEY. Zonder SUMA_SOURCES werkt de oude enkele SUMA_URL nog.
-    """
-    names = [n.strip() for n in os.getenv('SUMA_SOURCES', '').split(',') if n.strip()]
-
-    if not names:
-        return [{
-            'name': 'suma',
-            'url': os.getenv('SUMA_URL'),
-            'user': os.getenv('SUMA_USER'),
-            'key': os.getenv('SUMA_KEY'),
-        }]
-
-    sources = []
-    for name in names:
-        prefix = name.upper()
-        url = os.getenv(f'{prefix}_URL')
-        if not url:
-            print(f"{prefix}_URL ontbreekt in de omgeving")
-            sys.exit(1)
-        sources.append({
-            'name': name,
-            'url': url,
-            'user': os.getenv(f'{prefix}_USER') or os.getenv('SUMA_USER'),
-            'key': os.getenv(f'{prefix}_KEY') or os.getenv('SUMA_KEY'),
-        })
-    return sources
-
-
-def connectSuma(source):
-    context = ssl.create_default_context()
-    client = ServerProxy(source['url'], context=context)
-
-    try:
-        session = client.auth.login(source['user'], source['key'])
-    except (xmlrpc.client.Fault, xmlrpc.client.ProtocolError) as err:
-        print("Inloggen op SUSE Manager %s mislukt: %s" % (source['name'], str(err)))
-        sys.exit(1)
-
-    return client, session
-
 def getSumaNodes(client, session, name):
     try:
         sumanodes = client.system.listSystems(session)
@@ -122,18 +75,8 @@ def getSumaNodes(client, session, name):
 
 def checkin_ts(system):
     """last_checkin -> datetime, om bij dubbele registratie de meest
-    recente te kunnen kiezen."""
-    value = system.get('last_checkin')
-    if isinstance(value, xmlrpc.client.DateTime):
-        value = value.value
-    if isinstance(value, datetime):
-        return value
-    if value:
-        try:
-            return datetime.strptime(str(value), "%Y%m%dT%H:%M:%S")
-        except ValueError:
-            pass
-    return datetime.min
+    recente te kunnen kiezen. datetime.min als er niets bruikbaars is."""
+    return sumaclient.parse_xmlrpc_datetime(system.get('last_checkin')) or datetime.min
 
 
 def build_suma_lookup(sources):
@@ -157,33 +100,23 @@ def build_suma_lookup(sources):
     return lookup
 
 
-_thread_local = threading.local()
+def package_entry(pkg):
+    """Eén geinstalleerd pakket -> ons JSON-formaat.
 
-# Fouten die op een dode keep-alive verbinding wijzen (de server of een
-# load balancer sluit inactieve verbindingen; de volgende call krijgt
-# dan bv. SSLEOFError). Die verdienen een verse verbinding en 1 retry.
-_STALE_CONNECTION_ERRORS = (ssl.SSLError, ConnectionError, http.client.RemoteDisconnected)
-
-def source_client(source):
-    """ServerProxy per thread per endpoint (ServerProxy is niet
-    thread-safe); de ingelogde sessie-sleutel wordt wel gedeeld."""
-    clients = getattr(_thread_local, 'clients', None)
-    if clients is None:
-        clients = _thread_local.clients = {}
-
-    client = clients.get(source['name'])
-    if client is None:
-        context = ssl.create_default_context()
-        client = ServerProxy(source['url'], context=context)
-        clients[source['name']] = client
-    return client
-
-def drop_source_client(source):
-    """Gooi de client van deze thread weg zodat de volgende
-    source_client() een verse verbinding opzet."""
-    clients = getattr(_thread_local, 'clients', None)
-    if clients:
-        clients.pop(source['name'], None)
+    package_id is het SUMA-kanaal-pakket-id (NIET hetzelfde als onze
+    interne packages.id) — -1 of afwezig betekent: pakket is
+    geinstalleerd maar niet beschikbaar in de gekoppelde kanalen. Het
+    veldnaam in de ruwe struct verschilt mogelijk per SUMA-versie
+    ('package_id' of 'id'); allebei worden geprobeerd.
+    """
+    return {
+        'name': pkg.get('name'),
+        'version': pkg.get('version'),
+        'release': pkg.get('release'),
+        'arch': pkg.get('arch'),
+        'installtime': pkg.get('installtime'),
+        'package_id': pkg.get('package_id', pkg.get('id')),
+    }
 
 
 async def fetch_server_data(puppet_tuples, suma_lookup):
@@ -209,25 +142,18 @@ async def fetch_server_data(puppet_tuples, suma_lookup):
                 uitkomst['suma'] = True
                 uitkomst['apiversie'] = source['apiversie']
 
-                # Een gestorven keep-alive verbinding geeft een verse
-                # verbinding en 1 nieuwe poging; de sessie-sleutel
-                # blijft geldig, dus opnieuw inloggen is niet nodig.
-                for poging in (0, 1):
-                    try:
-                        client = source_client(source)
-                        uuid = client.system.getUuid(source['session'], match['id'])
-                        noncompliant = client.system.listExtraPackages(source['session'], match['id'])
-                        break
-                    except _STALE_CONNECTION_ERRORS:
-                        drop_source_client(source)
-                        if poging:
-                            raise
+                def call(client):
+                    uuid = client.system.getUuid(source['session'], match['id'])
+                    noncompliant = client.system.listExtraPackages(source['session'], match['id'])
+                    return uuid, noncompliant
+
+                uuid, noncompliant = sumaclient.call_with_retry(source, call)
 
                 uitkomst['uuid'] = uuid
-                uitkomst['extraPackages']  = []
-                if noncompliant:
-                    uitkomst['extraPackages'] = noncompliant
-                uitkomst['aantal']  = len(noncompliant)
+                uitkomst['extraPackages'] = (
+                    [package_entry(pkg) for pkg in noncompliant] if noncompliant else []
+                )
+                uitkomst['aantal'] = len(noncompliant) if noncompliant else 0
             else:
                 uitkomst['suma'] = False
                 uitkomst['uuid'] = ''
@@ -293,9 +219,9 @@ async def main():
 
     # Login op alle SUMA's; faalt er een, dan stopt de run (een halve
     # run zou de servers van die SUMA onterecht op suma=false zetten).
-    sources = load_suma_sources()
+    sources = sumaclient.load_suma_sources()
     for source in sources:
-        client, session_key = connectSuma(source)
+        client, session_key = sumaclient.connectSuma(source)
         source['client'] = client
         source['session'] = session_key
         source['apiversie'] = str(client.api.getVersion())

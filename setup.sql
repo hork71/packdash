@@ -101,3 +101,48 @@ CREATE INDEX idx_package_drift_drifting
 
 CREATE INDEX idx_server_packages_not_latest
     ON server_packages(server_id) WHERE NOT is_latest;
+
+-- Security advisories (see migrate_advisories.sql for existing
+-- databases): suma_package_id is the SUMA channel package id passed
+-- through per install (server_packages, not package_versions, since
+-- two different SUMA instances may report different channel ids for
+-- what we consider the same package version). errata/errata_cves/
+-- package_version_errata are filled by advisories.py after drift
+-- materialization, for the fleet's newest drifting versions only.
+
+ALTER TABLE server_packages
+ADD COLUMN suma_package_id INTEGER;
+
+CREATE TABLE errata (
+    advisory_name  VARCHAR(50) PRIMARY KEY,
+    advisory_id    VARCHAR(50),
+    advisory_type  VARCHAR(50),
+    synopsis       TEXT,
+    severity       VARCHAR(20),
+    issue_date     TIMESTAMPTZ,
+    suma_source    VARCHAR(20),
+    fetched_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE errata_cves (
+    advisory_name  VARCHAR(50) NOT NULL REFERENCES errata(advisory_name) ON DELETE CASCADE,
+    cve            VARCHAR(20) NOT NULL,
+
+    PRIMARY KEY (advisory_name, cve)
+);
+
+CREATE TABLE package_version_errata (
+    package_version_id BIGINT NOT NULL REFERENCES package_versions(id) ON DELETE CASCADE,
+    advisory_name       VARCHAR(50) NOT NULL REFERENCES errata(advisory_name) ON DELETE CASCADE,
+
+    PRIMARY KEY (package_version_id, advisory_name)
+);
+
+CREATE INDEX idx_package_version_errata_pv ON package_version_errata(package_version_id);
+
+CREATE TABLE package_version_advisory_check (
+    package_version_id BIGINT PRIMARY KEY REFERENCES package_versions(id) ON DELETE CASCADE,
+    checked_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    suma_package_id     INTEGER,
+    suma_source         VARCHAR(20)
+);

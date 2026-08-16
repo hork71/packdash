@@ -181,6 +181,12 @@ th.sortable:hover { color: var(--ink); }
 .badge-warn { background: color-mix(in srgb, var(--warn) 20%, var(--surface)); }
 .badge-muted { color: var(--ink-2); }
 
+/* Advisory severity (reuses the existing status palette, no new hues) */
+.badge-sev-critical { background: color-mix(in srgb, var(--critical) 18%, var(--surface)); }
+.badge-sev-important { background: color-mix(in srgb, var(--serious) 18%, var(--surface)); }
+.badge-sev-moderate { background: color-mix(in srgb, var(--warn) 22%, var(--surface)); }
+.badge-sev-low { background: color-mix(in srgb, var(--good) 12%, var(--surface)); }
+
 .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
 .chip {
   display: inline-block;
@@ -250,3 +256,13 @@ th.sortable:hover { color: var(--ink); }
 .os-group { margin-bottom: 1.5rem; }
 .version-block { margin: 0.75rem 0; }
 .version-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+
+.advisories { display: grid; gap: 0.5rem; margin: 0 0 0.75rem; }
+.advisory {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  background: color-mix(in srgb, var(--serious) 6%, var(--surface));
+}
+.advisory-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.advisory-synopsis { margin: 0.35rem 0; color: var(--ink-2); }

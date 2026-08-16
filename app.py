@@ -16,6 +16,15 @@ import rpmver
 app = Flask(__name__)
 app.teardown_appcontext(db.close_conn)
 
+_SEVERITY_RANK = {"Critical": 4, "Important": 3, "Moderate": 2, "Low": 1}
+
+
+def _max_severity(severities):
+    ranked = [s for s in severities if s in _SEVERITY_RANK]
+    if not ranked:
+        return None
+    return max(ranked, key=lambda s: _SEVERITY_RANK[s])
+
 
 @app.get("/")
 def index():
@@ -86,6 +95,12 @@ def stats():
         JOIN servers s ON s.id = sp.server_id
         WHERE NOT sp.is_latest AND s.inventory_status = 'ACTIVE'
     """)[0]["n"]
+    advisory_packages = db.query("""
+        SELECT COUNT(DISTINCT pd.package_id) AS n
+        FROM package_drift pd
+        JOIN package_version_errata pve ON pve.package_version_id = pd.latest_version_id
+        WHERE pd.version_count > 1
+    """)[0]["n"]
 
     return jsonify({
         "status_counts": clean(status_counts),
@@ -96,6 +111,7 @@ def stats():
         "last_run": clean(last_run)[0] if last_run else None,
         "drifting_packages": drifting_packages,
         "servers_behind": servers_behind,
+        "advisory_packages": advisory_packages,
     })
 
 
@@ -251,6 +267,34 @@ def package_detail(package_id):
         by_level.setdefault((row["os"], row["os_release"]), {}).setdefault(
             (row["version"], row["release"]), []).append(row)
 
+    advisories_by_version = {}
+    target_ids = [vid for vid in latest_ids.values() if vid]
+    if target_ids:
+        adv_rows = db.query("""
+            SELECT pve.package_version_id, e.advisory_name, e.advisory_type,
+                   e.synopsis, e.severity, e.issue_date,
+                   array_agg(DISTINCT ec.cve) FILTER (WHERE ec.cve IS NOT NULL) AS cves
+            FROM package_version_errata pve
+            JOIN errata e ON e.advisory_name = pve.advisory_name
+            LEFT JOIN errata_cves ec ON ec.advisory_name = e.advisory_name
+            WHERE pve.package_version_id = ANY(%s)
+            GROUP BY pve.package_version_id, e.advisory_name, e.advisory_type,
+                     e.synopsis, e.severity, e.issue_date
+            ORDER BY CASE e.severity
+                WHEN 'Critical' THEN 1 WHEN 'Important' THEN 2
+                WHEN 'Moderate' THEN 3 WHEN 'Low' THEN 4 ELSE 5 END,
+                e.advisory_name
+        """, (target_ids,))
+        for row in adv_rows:
+            advisories_by_version.setdefault(row["package_version_id"], []).append({
+                "advisory_name": row["advisory_name"],
+                "advisory_type": row["advisory_type"],
+                "synopsis": row["synopsis"],
+                "severity": row["severity"],
+                "issue_date": row["issue_date"].isoformat() if row["issue_date"] else None,
+                "cves": row["cves"] or [],
+            })
+
     os_groups = []
     for (os_name, os_release), versions in sorted(by_level.items()):
         latest_id = latest_ids.get((os_name, os_release))
@@ -258,11 +302,13 @@ def package_detail(package_id):
         vlist = []
         for vkey in sorted(versions, key=rpmver.vr_key, reverse=True):
             vrows = versions[vkey]
+            is_latest = any(r["version_id"] == latest_id for r in vrows)
             vlist.append({
                 "version": vkey[0],
                 "release": vkey[1],
                 "arch": vrows[0]["arch"],
-                "is_latest": any(r["version_id"] == latest_id for r in vrows),
+                "is_latest": is_latest,
+                "advisories": advisories_by_version.get(latest_id, []) if is_latest else [],
                 "servers": clean([{
                     "id": r["server_id"],
                     "hostname": r["hostname"],
@@ -310,7 +356,8 @@ def _drift_fleet(os_filter, os_release, q, limit, offset):
     """, params)[0]["n"]
 
     groups = clean(db.query(f"""
-        SELECT pd.package_id, p.name, pd.os, pd.os_release, pd.behind_count
+        SELECT pd.package_id, p.name, pd.os, pd.os_release, pd.behind_count,
+               pd.latest_version_id
         FROM package_drift pd
         JOIN packages p ON p.id = pd.package_id
         WHERE {where_sql}
@@ -359,13 +406,18 @@ def _drift_scoped(beheergroep, os_filter, os_release, q, limit, offset):
 
     groups = clean(db.query(f"""
         SELECT pv.package_id, p.name, s.os, s.os_release,
-               COUNT(*) FILTER (WHERE NOT sp.is_latest) AS behind_count
+               COUNT(*) FILTER (WHERE NOT sp.is_latest) AS behind_count,
+               pd.latest_version_id
         FROM server_packages sp
         JOIN servers s ON s.id = sp.server_id
         JOIN package_versions pv ON pv.id = sp.package_version_id
         JOIN packages p ON p.id = pv.package_id
+        JOIN package_drift pd
+               ON pd.package_id = pv.package_id
+              AND pd.os = s.os
+              AND pd.os_release = s.os_release
         WHERE {where_sql}
-        GROUP BY pv.package_id, p.name, s.os, s.os_release
+        GROUP BY pv.package_id, p.name, s.os, s.os_release, pd.latest_version_id
         {behind_having}
         ORDER BY behind_count DESC, p.name, s.os, s.os_release
         LIMIT %s OFFSET %s
@@ -426,6 +478,29 @@ def drift():
                 "server_count": v["server_count"],
                 "is_latest": v["is_latest"],
             } for v in versions]
+
+        # Advisory summary for the newest version of each group on this
+        # page — enough for a badge without a second page load. Full
+        # advisory/CVE detail lives on the package detail page.
+        version_ids = {g["latest_version_id"] for g in groups if g.get("latest_version_id")}
+        adv_by_version = {}
+        if version_ids:
+            adv_rows = db.query("""
+                SELECT pve.package_version_id, e.severity
+                FROM package_version_errata pve
+                JOIN errata e ON e.advisory_name = pve.advisory_name
+                WHERE pve.package_version_id IN %s
+            """, (tuple(version_ids),))
+            for row in adv_rows:
+                adv_by_version.setdefault(row["package_version_id"], []).append(row["severity"])
+
+        for g in groups:
+            severities = adv_by_version.get(g.get("latest_version_id"), [])
+            g["advisories"] = (
+                {"count": len(severities), "max_severity": _max_severity(severities)}
+                if severities else None
+            )
+            g.pop("latest_version_id", None)
 
     return jsonify({"total": total, "limit": limit, "offset": offset, "items": groups})
 

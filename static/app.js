@@ -43,6 +43,16 @@ function verLabel(v) {
   return `${v.version}-${v.release}`;
 }
 
+// Severity never carries meaning through color alone — the label
+// text always states it, matching the rest of the badge system.
+function advisoryBadge(adv) {
+  if (!adv || !adv.count) return null;
+  const count = adv.count === 1 ? "1 advisory" : `${adv.count} advisories`;
+  const label = adv.max_severity ? `${adv.max_severity} · ${count}` : count;
+  const cls = adv.max_severity ? `badge-sev-${adv.max_severity.toLowerCase()}` : "badge-muted";
+  return el("span", { class: `badge ${cls}` }, label);
+}
+
 function table(headers, rows, emptyText) {
   if (!rows.length) return el("p", { class: "muted" }, emptyText || "Nothing to show.");
   return el("div", { class: "table-wrap" },
@@ -155,6 +165,7 @@ async function dashboardView() {
       tile("Missing servers", status.MISSING || 0, "#/servers"),
       tile("Tracked packages", s.package_count, "#/packages"),
       tile("Packages with drift", s.drifting_packages, "#/drift"),
+      tile("Packages with advisories", s.advisory_packages || 0, "#/drift"),
       tile("Servers behind", s.servers_behind, "#/drift"),
       lastImport
         ? tile(`Last import (${lastImport.slice(0, 10)})`, lastImport.slice(11, 16), "#/runs")
@@ -175,7 +186,8 @@ async function dashboardView() {
 
 function driftTable(groups) {
   return table(
-    ["Package", "OS release", "Version spread (newest first)", el("th", { class: "num" }, "Servers behind")],
+    ["Package", "OS release", "Version spread (newest first)",
+     el("th", { class: "num" }, "Servers behind"), "Security"],
     groups.map(g =>
       el("tr", { class: "clickable", onclick: () => goto(`#/packages/${g.package_id}`) },
         el("td", {}, g.name),
@@ -183,7 +195,8 @@ function driftTable(groups) {
         el("td", {}, el("div", { class: "chips" }, g.versions.map(v =>
           el("span", { class: "chip " + (v.is_latest ? "chip-latest" : "chip-behind") },
             `${v.is_latest ? "✓" : "↓"} ${verLabel(v)} × ${v.server_count}`)))),
-        el("td", { class: "num" }, String(g.behind_count)))),
+        el("td", { class: "num" }, String(g.behind_count)),
+        el("td", {}, advisoryBadge(g.advisories) ?? el("span", { class: "muted" }, "—")))),
     "No version drift found — every package is at one version per OS.");
 }
 
@@ -408,6 +421,20 @@ async function packageDetailView(id) {
                 el("span", { class: "chip " + (v.is_latest ? "chip-latest" : "chip-behind") },
                   `${v.is_latest ? "✓ newest" : "↓ behind"} ${verLabel(v)}`),
                 el("span", { class: "muted" }, v.arch)),
+              v.advisories && v.advisories.length
+                ? el("div", { class: "advisories" }, v.advisories.map(a =>
+                    el("div", { class: "advisory" },
+                      el("div", { class: "advisory-head" },
+                        el("span", {
+                          class: "badge " + (a.severity ? `badge-sev-${a.severity.toLowerCase()}` : "badge-muted"),
+                        }, a.severity || a.advisory_type || "Advisory"),
+                        el("strong", {}, a.advisory_name),
+                        a.issue_date ? el("span", { class: "muted" }, fmtDate(a.issue_date)) : null),
+                      a.synopsis ? el("p", { class: "advisory-synopsis" }, a.synopsis) : null,
+                      a.cves.length
+                        ? el("div", { class: "chips" }, a.cves.map(cve => el("span", { class: "chip" }, cve)))
+                        : null)))
+                : null,
               table(["Server", "Beheergroep", "Osversie", "Status", "Installed"],
                 v.servers.map(s =>
                   el("tr", { class: "clickable", onclick: () => goto(`#/servers/${s.id}`) },

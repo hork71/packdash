@@ -237,7 +237,8 @@ cur.execute("""
 CREATE TEMP TABLE staging_server_packages (
     server_id UUID,
     package_version_id BIGINT,
-    install_time TIMESTAMPTZ
+    install_time TIMESTAMPTZ,
+    suma_package_id INTEGER
 ) ON COMMIT DROP
 """)
 
@@ -257,7 +258,14 @@ for server in imported:
         ts = parse_install_time(pkg["installtime"])
         ts_text = ts.isoformat(sep=" ") if ts else "\\N"
 
-        buffer.write(f"{server_id}\t{version_id}\t{ts_text}\n")
+        # -1 means "installed but not available in subscribed channels"
+        # (per SUMA); NULL is the natural way to represent that here.
+        raw_suma_pid = pkg.get("package_id")
+        suma_pid_text = (
+            str(raw_suma_pid) if raw_suma_pid not in (None, -1) else "\\N"
+        )
+
+        buffer.write(f"{server_id}\t{version_id}\t{ts_text}\t{suma_pid_text}\n")
         buffered += 1
         entry_count += 1
 
@@ -277,14 +285,16 @@ INSERT INTO server_packages(
 
     server_id,
     package_version_id,
-    install_time
+    install_time,
+    suma_package_id
 
 )
 SELECT DISTINCT ON (server_id, package_version_id)
 
     server_id,
     package_version_id,
-    install_time
+    install_time,
+    suma_package_id
 
 FROM staging_server_packages
 ORDER BY server_id, package_version_id;

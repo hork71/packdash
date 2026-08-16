@@ -401,7 +401,8 @@
         "name": "zabbix-agent2",
         "installtime": "3/14/26 12:39:08 PM CET",
         "arch": "x86_64",
-        "version": "6.0.42"
+        "version": "6.0.42",
+        "package_id": -1
       },
       {
         "release": "release1.el9",
@@ -592,21 +593,24 @@
         "name": "zabbix-agent2",
         "installtime": "4/13/26 4:19:19 AM CEST",
         "arch": "x86_64",
-        "version": "6.0.45"
+        "version": "6.0.45",
+        "package_id": 40045
       },
       {
         "release": "release1.el9",
         "name": "zabbix-agent2-plugin-mongodb",
         "installtime": "4/13/26 4:19:22 AM CEST",
         "arch": "x86_64",
-        "version": "6.0.45"
+        "version": "6.0.45",
+        "package_id": 40046
       },
       {
         "release": "release1.el9",
         "name": "zabbix-agent2-plugin-postgresql",
         "installtime": "4/13/26 4:19:26 AM CEST",
         "arch": "x86_64",
-        "version": "6.0.45"
+        "version": "6.0.45",
+        "package_id": 40047
       },
       {
         "release": "release1.el9",
@@ -620,7 +624,8 @@
         "name": "zabbix-sender",
         "installtime": "4/13/26 4:19:29 AM CEST",
         "arch": "x86_64",
-        "version": "6.0.45"
+        "version": "6.0.45",
+        "package_id": 40048
       }
     ],
     "aantal": 26
@@ -731,7 +736,8 @@
         "name": "elastic-agent",
         "installtime": "2/20/26 4:40:18 PM CET",
         "arch": "amd64",
-        "version": "8.19.7"
+        "version": "8.19.7",
+        "package_id": 50019
       },
       {
         "release": "1jammy",
@@ -745,14 +751,16 @@
         "name": "zabbix-agent2",
         "installtime": "4/13/26 4:25:41 AM CEST",
         "arch": "amd64",
-        "version": "1:6.0.45"
+        "version": "1:6.0.45",
+        "package_id": 50045
       },
       {
         "release": "1+ubuntu22.04",
         "name": "zabbix-sender",
         "installtime": "4/13/26 4:25:44 AM CEST",
         "arch": "amd64",
-        "version": "1:6.0.45"
+        "version": "1:6.0.45",
+        "package_id": 50048
       }
     ],
     "aantal": 4
