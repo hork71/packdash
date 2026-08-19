@@ -154,33 +154,51 @@ def run(cur, sources, refresh, dry_run):
     }
 
     # Phase 1 (sequential, local DB reads only): resolve a channel
-    # package id + source per target, and ask what advisories provide
-    # that exact package build.
+    # package id + source per target. A shared cursor can't safely be
+    # used from multiple threads, but this is cheap (indexed lookups),
+    # so it isn't worth its own pool.
     checked_rows = []              # (package_version_id, suma_pid, source_name)
-    version_advisory_names = {}    # package_version_id -> [advisory_name, ...]
-    to_fetch = {}                  # advisory_name -> source (first source seen wins;
-                                    # advisory content doesn't depend on which mirror)
+    resolved = []                  # (package_version_id, suma_pid, source)
 
     for package_version_id in targets:
         suma_pid, source = resolve_source(cur, package_version_id, sources_by_apiversie)
         if not source:
             checked_rows.append((package_version_id, None, None))
             continue
+        resolved.append((package_version_id, suma_pid, source))
 
+    # Phase 2 (parallel, network-bound): ask each resolved target's
+    # channel package which advisories provide it. One listProvidingErrata
+    # call per DRIFTING TARGET (not deduplicated — every target is a
+    # different package build) is normally the majority of the run's
+    # network round trips, so this is the phase WORKERS actually needs
+    # to speed up; it used to run sequentially here by mistake.
+    version_advisory_names = {}    # package_version_id -> [advisory_name, ...]
+    to_fetch = {}                  # advisory_name -> source (first source seen wins;
+                                    # advisory content doesn't depend on which mirror)
+
+    def fetch_names(item):
+        package_version_id, suma_pid, source = item
         try:
-            names = fetch_advisories_for_target(source, suma_pid)
+            return package_version_id, suma_pid, source, fetch_advisories_for_target(source, suma_pid), None
         except Exception as e:
-            print(f"WARNING: listProvidingErrata failed for package_version "
-                  f"{package_version_id} (suma_package_id {suma_pid} via "
-                  f"{source['name']}): {e}")
-            continue  # not marked checked - retried next run
+            return package_version_id, suma_pid, source, None, e
 
-        checked_rows.append((package_version_id, suma_pid, source['name']))
-        version_advisory_names[package_version_id] = names
-        for name in names:
-            to_fetch.setdefault(name, source)
+    if resolved:
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            for package_version_id, suma_pid, source, names, err in pool.map(fetch_names, resolved):
+                if err:
+                    print(f"WARNING: listProvidingErrata failed for package_version "
+                          f"{package_version_id} (suma_package_id {suma_pid} via "
+                          f"{source['name']}): {err}")
+                    continue  # not marked checked - retried next run
 
-    # Phase 2 (parallel, network-bound): fetch full details once per
+                checked_rows.append((package_version_id, suma_pid, source['name']))
+                version_advisory_names[package_version_id] = names
+                for name in names:
+                    to_fetch.setdefault(name, source)
+
+    # Phase 3 (parallel, network-bound): fetch full details once per
     # distinct advisory name, regardless of how many targets share it.
     errata_rows = {}
 
@@ -216,7 +234,7 @@ def run(cur, sources, refresh, dry_run):
             print(f"    synopsis: {r['synopsis']!r}")
         return
 
-    # Phase 3 (sequential, local DB writes only): persist.
+    # Phase 4 (sequential, local DB writes only): persist.
     if errata_rows:
         execute_values(cur, """
             INSERT INTO errata(advisory_name, advisory_id, advisory_type,
