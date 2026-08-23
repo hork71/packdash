@@ -187,7 +187,7 @@ async function dashboardView() {
 function driftTable(groups) {
   return table(
     ["Package", "OS release", "Version spread (newest first)",
-     el("th", { class: "num" }, "Servers behind"), "Security"],
+      el("th", { class: "num" }, "Servers behind"), "Security"],
     groups.map(g =>
       el("tr", { class: "clickable", onclick: () => goto(`#/packages/${g.package_id}`) },
         el("td", {}, g.name),
@@ -423,17 +423,17 @@ async function packageDetailView(id) {
                 el("span", { class: "muted" }, v.arch)),
               v.advisories && v.advisories.length
                 ? el("div", { class: "advisories" }, v.advisories.map(a =>
-                    el("div", { class: "advisory" },
-                      el("div", { class: "advisory-head" },
-                        el("span", {
-                          class: "badge " + (a.severity ? `badge-sev-${a.severity.toLowerCase()}` : "badge-muted"),
-                        }, a.severity || a.advisory_type || "Advisory"),
-                        el("strong", {}, a.advisory_name),
-                        a.issue_date ? el("span", { class: "muted" }, fmtDate(a.issue_date)) : null),
-                      a.synopsis ? el("p", { class: "advisory-synopsis" }, a.synopsis) : null,
-                      a.cves.length
-                        ? el("div", { class: "chips" }, a.cves.map(cve => el("span", { class: "chip" }, cve)))
-                        : null)))
+                  el("div", { class: "advisory" },
+                    el("div", { class: "advisory-head" },
+                      el("span", {
+                        class: "badge " + (a.severity ? `badge-sev-${a.severity.toLowerCase()}` : "badge-muted"),
+                      }, a.severity || a.advisory_type || "Advisory"),
+                      el("strong", {}, a.advisory_name),
+                      a.issue_date ? el("span", { class: "muted" }, fmtDate(a.issue_date)) : null),
+                    a.synopsis ? el("p", { class: "advisory-synopsis" }, a.synopsis) : null,
+                    a.cves.length
+                      ? el("div", { class: "chips" }, a.cves.map(cve => el("span", { class: "chip" }, cve)))
+                      : null)))
                 : null,
               table(["Server", "Beheergroep", "Osversie", "Status", "Installed"],
                 v.servers.map(s =>

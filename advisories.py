@@ -15,11 +15,14 @@ imported inventory data. Scope is drifting groups only (package_drift
 rows where version_count > 1): a package everyone already has the
 newest version of has nobody left to convince.
 
-Caching: a package_version's identity never changes, so once it has
-been checked (recorded in package_version_advisory_check) it is not
-re-checked automatically. Pass --refresh to force re-checking
-everything, e.g. if SUSE later fills in CVE data that was initially
-empty.
+Caching: SUSE Manager imports new advisories daily, and an advisory
+published today can turn out to cover a package_version we already
+checked (and an existing advisory can gain newly-disclosed CVE ids
+over time) — so "checked once" is never a permanent fact. Targets are
+re-checked once their last check has aged past --max-age-hours
+(default 20h, just under a day so a daily cron reliably exceeds it
+without a same-day re-run needlessly repeating work). Pass --refresh
+to ignore the cache entirely and recheck everything right now.
 
 FIELD-NAME CAVEAT: the exact struct fields read from
 packages.listProvidingErrata / errata.getDetails / errata.listCves are
@@ -42,6 +45,7 @@ from psycopg2.extras import execute_values
 import sumaclient
 
 WORKERS = 10
+DEFAULT_MAX_AGE_HOURS = 20
 
 _SEVERITY_RE = re.compile(r'\b(critical|important|moderate|low)\b', re.IGNORECASE)
 
@@ -56,20 +60,28 @@ def guess_severity(synopsis):
     return m.group(1).capitalize() if m else None
 
 
-def target_versions(cur, refresh):
+def target_versions(cur, refresh, max_age_hours=DEFAULT_MAX_AGE_HOURS):
     """Distinct latest_version_id of drifting package_drift groups that
-    have not been checked yet (or all of them, with --refresh)."""
-    already_checked = (
+    are due a check: never checked, or last checked more than
+    max_age_hours ago. --refresh ignores the cache and includes
+    everything currently drifting."""
+    cache_filter = (
         "" if refresh else
-        "AND pd.latest_version_id NOT IN "
-        "(SELECT package_version_id FROM package_version_advisory_check)"
+        """
+        AND (
+            c.package_version_id IS NULL
+            OR c.checked_at < NOW() - (%(max_age_hours)s || ' hours')::interval
+        )
+        """
     )
     cur.execute(f"""
         SELECT DISTINCT pd.latest_version_id
         FROM package_drift pd
+        LEFT JOIN package_version_advisory_check c
+               ON c.package_version_id = pd.latest_version_id
         WHERE pd.version_count > 1
-        {already_checked}
-    """)
+        {cache_filter}
+    """, {"max_age_hours": max_age_hours})
     return [r[0] for r in cur.fetchall()]
 
 
@@ -143,10 +155,10 @@ def fetch_errata_details(source, advisory_name):
     }
 
 
-def run(cur, sources, refresh, dry_run):
-    targets = target_versions(cur, refresh)
+def run(cur, sources, refresh, dry_run, max_age_hours=DEFAULT_MAX_AGE_HOURS):
+    targets = target_versions(cur, refresh, max_age_hours)
     if not targets:
-        print("No new drifting versions to check for advisories.")
+        print("No drifting versions due a check right now.")
         return
 
     sources_by_apiversie = {
@@ -293,7 +305,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--refresh", action="store_true",
-        help="Re-check every drifting version, including ones already checked.")
+        help="Ignore the check-age cache and recheck every drifting version right now.")
+    parser.add_argument(
+        "--max-age-hours", type=float, default=DEFAULT_MAX_AGE_HOURS,
+        help=f"Re-check a version once its last check is older than this many hours "
+             f"(default {DEFAULT_MAX_AGE_HOURS}).")
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Fetch and print what would be stored, without writing to the database.")
@@ -316,7 +332,7 @@ def main():
     cur = conn.cursor()
 
     try:
-        run(cur, sources, args.refresh, args.dry_run)
+        run(cur, sources, args.refresh, args.dry_run, args.max_age_hours)
         conn.commit()
     except Exception:
         conn.rollback()
