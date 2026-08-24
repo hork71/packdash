@@ -428,7 +428,10 @@ async function packageDetailView(id) {
                       el("span", {
                         class: "badge " + (a.severity ? `badge-sev-${a.severity.toLowerCase()}` : "badge-muted"),
                       }, a.severity || a.advisory_type || "Advisory"),
-                      el("strong", {}, a.advisory_name),
+                      a.advisory_link
+                        ? el("a", { href: a.advisory_link, target: "_blank", rel: "noopener noreferrer" },
+                            el("strong", {}, a.advisory_name), " ↗")
+                        : el("strong", {}, a.advisory_name),
                       a.issue_date ? el("span", { class: "muted" }, fmtDate(a.issue_date)) : null),
                     a.synopsis ? el("p", { class: "advisory-synopsis" }, a.synopsis) : null,
                     a.cves.length

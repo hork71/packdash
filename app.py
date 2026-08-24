@@ -25,6 +25,15 @@ def _max_severity(severities):
         return None
     return max(ranked, key=lambda s: _SEVERITY_RANK[s])
 
+def suma_advisory_link(id, source):
+
+    links = {
+        "suma4": f"https://server1.com/rhn/errata/details/Details.do?eid={id}",
+        "suma5": f"https://server2.com/rhn/errata/details/Details.do?eid={id}"
+    }
+
+    return links.get(source, '')
+
 
 @app.get("/")
 def index():
@@ -272,7 +281,7 @@ def package_detail(package_id):
     if target_ids:
         adv_rows = db.query("""
             SELECT pve.package_version_id, e.advisory_name, e.advisory_type,
-                   e.synopsis, e.severity, e.issue_date,
+                   e.synopsis, e.severity, e.issue_date, e.advisory_id, e.suma_source,
                    array_agg(DISTINCT ec.cve) FILTER (WHERE ec.cve IS NOT NULL) AS cves
             FROM package_version_errata pve
             JOIN errata e ON e.advisory_name = pve.advisory_name
@@ -291,6 +300,7 @@ def package_detail(package_id):
                 "advisory_type": row["advisory_type"],
                 "synopsis": row["synopsis"],
                 "severity": row["severity"],
+                "advisory_link": suma_advisory_link(row["advisory_id"], row["suma_source"]),
                 "issue_date": row["issue_date"].isoformat() if row["issue_date"] else None,
                 "cves": row["cves"] or [],
             })
