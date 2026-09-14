@@ -84,6 +84,8 @@ _thread_local = threading.local()
 # Fouten die op een dode keep-alive verbinding wijzen (de server of een
 # load balancer sluit inactieve verbindingen; de volgende call krijgt
 # dan bv. SSLEOFError). Die verdienen een verse verbinding en 1 retry.
+# ssl.SSLCertVerificationError is ook een ssl.SSLError, maar hoort hier
+# niet bij; call_with_retry vangt die apart af.
 STALE_CONNECTION_ERRORS = (ssl.SSLError, ConnectionError, http.client.RemoteDisconnected)
 
 
@@ -117,6 +119,12 @@ def call_with_retry(source, fn):
     for poging in (0, 1):
         try:
             return fn(source_client(source))
+        except ssl.SSLCertVerificationError:
+            # Een certificaat dat niet valideert is configuratie, geen
+            # dode verbinding: een tweede poging levert exact dezelfde
+            # fout op. Meteen doorgeven scheelt een handshake en maakt
+            # in de logs duidelijk waar het echt op vastloopt.
+            raise
         except STALE_CONNECTION_ERRORS:
             drop_source_client(source)
             if poging:

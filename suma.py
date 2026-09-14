@@ -119,6 +119,14 @@ def package_entry(pkg):
     }
 
 
+def bron(match):
+    """Welke SUMA hoorde bij deze server, voor in een foutmelding.
+
+    Zonder dit label is bij een dual-run niet te zien of suma4 of suma5
+    de boosdoener is."""
+    return f" [{match['source']['name']}]" if match else ""
+
+
 async def fetch_server_data(puppet_tuples, suma_lookup):
     MAX_CONCURRENT_REQUESTS = 50
 
@@ -126,6 +134,7 @@ async def fetch_server_data(puppet_tuples, suma_lookup):
         vandaag = datetime.now(tz=ZoneInfo("Europe/Amsterdam"))
         datum = vandaag.strftime("%m/%d/%y %H:%M:%S %p %Z")
         uitkomst = {}
+        match = None
         try:
             uitkomst['naam'] = server_tuple[0]
             uitkomst['beheergroep'] = server_tuple[1]
@@ -163,10 +172,10 @@ async def fetch_server_data(puppet_tuples, suma_lookup):
 
             return uitkomst
         except xmlrpc.client.Fault as e:
-            print(f"XML-RPC Fout voor {server_tuple[0]}: {e.faultCode} - {e.faultString}")
+            print(f"XML-RPC Fout voor {server_tuple[0]}{bron(match)}: {e.faultCode} - {e.faultString}")
             return {}
         except Exception as e:
-            print(f"Fout bij binnenhalen data voor {server_tuple[0]}: {str(e)}")
+            print(f"Fout bij binnenhalen data voor {server_tuple[0]}{bron(match)}: {str(e)}")
             return {}
 
     async def fetch_single_server_async(executor: ThreadPoolExecutor,
