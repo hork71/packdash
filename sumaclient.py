@@ -5,12 +5,15 @@ lookups) so login, thread-local connection reuse, and the stale
 keep-alive retry logic live in one place instead of two.
 """
 
+import hashlib
 import http.client
 import os
+import socket
 import ssl
 import sys
 import threading
 from datetime import datetime
+from urllib.parse import urlsplit
 import xmlrpc.client
 from xmlrpc.client import ServerProxy
 
@@ -57,11 +60,120 @@ def connectSuma(source):
 
     try:
         session = client.auth.login(source['user'], source['key'])
+    except ssl.SSLCertVerificationError as err:
+        # Loopt de login hierop vast, dan stopt de run met een traceback;
+        # die zegt niet welk certificaat het betreft, dus dat eerst.
+        report_cert_problem(source, err)
+        raise
     except (xmlrpc.client.Fault, xmlrpc.client.ProtocolError) as err:
         print("Inloggen op SUSE Manager %s mislukt: %s" % (source['name'], str(err)))
         sys.exit(1)
 
     return client, session
+
+
+def _rdn_string(rdn):
+    """De naamvelden uit getpeercert() als een leesbare regel."""
+    kort = {
+        'commonName': 'CN',
+        'organizationName': 'O',
+        'organizationalUnitName': 'OU',
+        'countryName': 'C',
+        'stateOrProvinceName': 'ST',
+        'localityName': 'L',
+    }
+    delen = []
+    for stuk in rdn or ():
+        for sleutel, waarde in stuk:
+            delen.append(f"{kort.get(sleutel, sleutel)}={waarde}")
+    return ', '.join(delen)
+
+
+def _peer_cert(context, adres, hostname, timeout):
+    with socket.create_connection(adres, timeout=timeout) as sock:
+        with context.wrap_socket(sock, server_hostname=hostname) as tls:
+            return tls.getpeercert()
+
+
+def describe_peer_cert(url, timeout=10):
+    """Subject/issuer/vingerafdruk van het certificaat achter url.
+
+    Een SSLCertVerificationError noemt het certificaat zelf niet: de
+    handshake breekt af voordat er iets uit te lezen valt. Daarom halen
+    we het apart op, zonder verificatie en puur om te loggen.
+
+    getpeercert() vult subject en issuer alleen na een geslaagde
+    verificatie, dus vertrouwen we het opgehaalde certificaat eenmalig
+    als anchor om het geparseerd terug te krijgen - dat scheelt een
+    afhankelijkheid van `cryptography` en werkt op Python 3.12 (de
+    chain-API get_unverified_chain() bestaat pas vanaf 3.13).
+
+    Geeft None als het niet lukt; deze functie mag de echte fout nooit
+    overschaduwen.
+    """
+    onderdelen = urlsplit(url)
+    if onderdelen.scheme != 'https' or not onderdelen.hostname:
+        return None
+    adres = (onderdelen.hostname, onderdelen.port or 443)
+
+    try:
+        pem = ssl.get_server_certificate(adres, timeout=timeout)
+        vingerafdruk = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
+
+        context = ssl.create_default_context(cadata=pem)
+        # Zonder dit vlag telt een certificaat zonder CA-bit niet als
+        # anchor en mislukt de truc alsnog. Python 3.13 zet het zelf
+        # aan, 3.12 (Ubuntu 24.04) niet.
+        context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+        try:
+            cert = _peer_cert(context, adres, onderdelen.hostname, timeout)
+        except ssl.SSLCertVerificationError:
+            # De naam in het certificaat dekt de hostname niet. Dat is
+            # op zichzelf nieuws, maar we willen nog steeds zien wat er
+            # dan wel aangeboden wordt.
+            context.check_hostname = False
+            cert = _peer_cert(context, adres, onderdelen.hostname, timeout)
+    except (OSError, ValueError):
+        return None
+
+    return {
+        'subject': _rdn_string(cert.get('subject')),
+        'issuer': _rdn_string(cert.get('issuer')),
+        'notAfter': cert.get('notAfter', ''),
+        'sha256': vingerafdruk,
+    }
+
+
+_gemelde_certfouten = set()
+_certmelding_lock = threading.Lock()
+
+
+def report_cert_problem(source, err):
+    """Meld eenmalig per endpoint welk certificaat niet valideert.
+
+    Eenmalig, want met 50 workers levert dit anders per server dezelfde
+    regels op, plus elke keer een extra verbinding om het certificaat
+    op te halen.
+    """
+    with _certmelding_lock:
+        if source['name'] in _gemelde_certfouten:
+            return
+        _gemelde_certfouten.add(source['name'])
+
+    reden = getattr(err, 'verify_message', None) or str(err)
+    print(f"Certificaat van {source['name']} ({source['url']}) valideert niet: {reden}")
+
+    cert = describe_peer_cert(source['url'])
+    if not cert:
+        print("  Certificaat kon niet worden opgehaald om te tonen.")
+        return
+
+    print(f"  aangeboden      : {cert['subject']}")
+    print(f"  uitgegeven door : {cert['issuer']}")
+    print(f"  geldig tot      : {cert['notAfter']}")
+    print(f"  SHA-256         : {cert['sha256']}")
+    print("  Ontbreekt de uitgever hierboven in /etc/ssl/certs, installeer die dan "
+          "in /usr/local/share/ca-certificates/ (.crt, PEM) + update-ca-certificates.")
 
 
 def parse_xmlrpc_datetime(value):
@@ -119,11 +231,12 @@ def call_with_retry(source, fn):
     for poging in (0, 1):
         try:
             return fn(source_client(source))
-        except ssl.SSLCertVerificationError:
+        except ssl.SSLCertVerificationError as err:
             # Een certificaat dat niet valideert is configuratie, geen
             # dode verbinding: een tweede poging levert exact dezelfde
             # fout op. Meteen doorgeven scheelt een handshake en maakt
             # in de logs duidelijk waar het echt op vastloopt.
+            report_cert_problem(source, err)
             raise
         except STALE_CONNECTION_ERRORS:
             drop_source_client(source)
